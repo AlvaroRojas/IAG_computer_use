@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/out/
+.sessions/
+*.sqlite
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+murex/jar/
+
+# Vendored JDK archives (extracted dirs are tracked via LFS; archives are redundant)
+murex/jdk-17.0.18_linux-x64_bin.tar.gz
+murex/jdk-17.0.18_windows-x64_bin.zip

@@ -1,0 +1,33 @@
+# Build context = repo root. Keep it lean: the image only needs murex/ payload
+# (jars, bin, mxjboot.jar, client.xml, the JDK tarball) + docker/ scripts.
+
+# Python / project cruft
+.venv/
+.git/
+.github/
+data/
+**/__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+tests/
+
+# Murex: runtime is Temurin 17 from the base image, so NONE of the bundled JDKs
+# are needed in the image. Exclude every JDK dir + archive (Java 8 and 17, all
+# OS/arch flavours) to keep the build context small — only murex/{jar,bin,
+# mxjboot.jar,client.xml} are actually COPYed.
+murex/jdk1.8.0_111_586/
+murex/jdk1.8.0_202_linux/
+murex/jdk-8u202-linux-x64.tar.gz
+murex/jdk-17.0.18_linux-x64_bin/
+murex/jdk-17.0.18_windows-x64_bin/
+murex/jdk-17.0.18_linux-x64_bin.tar.gz
+murex/jdk-17.0.18_windows-x64_bin.zip
+murex/logs/
+murex/startClient.lock
+murex/client.cmd
+# Local-launch / diagnostic artifacts (not used by the image)
+murex/client.sh
+murex/java.policy
+murex/_diag_out.txt
+murex/_diag_err.txt

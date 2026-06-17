@@ -1,0 +1,7 @@
+// Permissive policy for the Mx.3 client. The launcher passes
+// -Djava.security.policy=java.policy; the vendor scripts reference this file but
+// it is not shipped, and the client streams remote code from the fileserver, so
+// grant all here. Network reachability to the fileserver is the real control.
+grant {
+    permission java.security.AllPermission;
+};

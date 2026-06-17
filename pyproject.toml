@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iag-accounting-sim"
+version = "0.1.0"
+description = "Murex accounting-simulation before/after comparator driven by OpenAI computer-use over Playwright"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.60",
+    "playwright>=1.49",
+    "langgraph>=0.2.50",
+    "langgraph-checkpoint-sqlite>=3.0",  # durable cross-process resume (--resume)
+    "pandas>=2.2",
+    "datacompy>=0.13",
+    "tenacity>=9.0",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+iag-sim = "iag_sim.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"

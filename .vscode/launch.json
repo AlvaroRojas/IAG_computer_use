@@ -1,0 +1,63 @@
+{
+  // Debug/run configs for the IAG accounting comparator.
+  // All use the project venv interpreter and load .env. F5 picks the selected one.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run: async engine",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "iag_sim",
+      "args": ["run", "--trades", "data/trades.csv"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": false
+    },
+    {
+      "name": "Run: langgraph engine (durable)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "iag_sim",
+      "args": ["run", "--trades", "data/trades.csv", "--engine", "langgraph"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": false
+    },
+    {
+      "name": "Resume: langgraph (pick run dir)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "iag_sim",
+      "args": ["run", "--resume", "${input:resumeDir}"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": false
+    },
+    {
+      "name": "Run: async (headed web, max-conc 2)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "iag_sim",
+      "args": ["run", "--trades", "data/trades.csv", "--headed", "--max-concurrency", "2"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "resumeDir",
+      "type": "promptString",
+      "description": "Run dir to resume (contains checkpoints.sqlite), e.g. data/out/run-20260602-103747",
+      "default": "data/out/run-"
+    }
+  ]
+}

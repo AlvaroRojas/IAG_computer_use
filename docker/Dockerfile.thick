@@ -1,0 +1,60 @@
+# Murex Mx.3 thick client (Java Swing GUI) in a headless Linux container.
+#
+# Boots Xvfb + a lightweight WM, AUTO-LAUNCHES the client on container start
+# against $MUREX_ENV_TARGET, and ships ImageMagick `import` + `xdotool` so the
+# computer-use loop (src/iag_sim/harness/docker.py) can screenshot and drive it.
+# One container per trade; parallelism is many containers (each its own X).
+#
+# RUNTIME = Java 17. The vendor murex/ ships an old jdk1.8.0_202 + Java-8 launch
+# scripts, but the actual client payload (jar/mxjboot.jar -> RmiLoader and ~116k
+# classes in jar/) is compiled for Java 17 (class file v61). Java 8 dies with
+# UnsupportedClassVersionError, so we use a Temurin 17 JDK and the launcher drops
+# the Java-8-only flags.
+#
+# Build context MUST be the repo root (needs murex/ + docker/):
+#   docker build -f docker/Dockerfile.thick -t murex-thick:latest .
+# Then point the app at it:  MUREX_DOCKER_IMAGE=murex-thick:latest
+FROM eclipse-temurin:17-jdk-jammy
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# X server + WM + screenshot/input tools + the X/font libs Java AWT needs +
+# x11vnc/noVNC for live viewing (gated behind ENABLE_VNC at runtime).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xvfb fluxbox x11-utils \
+      imagemagick xdotool \
+      x11vnc novnc websockify \
+      libxext6 libxrender1 libxtst6 libxi6 libxt6 libxxf86vm1 \
+      libfreetype6 fontconfig fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV MUREX_APP_DIR=/opt/murex
+WORKDIR /opt/murex
+
+# Temurin sets JAVA_HOME=/opt/java/openjdk; the launcher reads it.
+ENV JAVAHOME=/opt/java/openjdk
+
+# Murex client payload. Most jars STREAM from the fileserver at runtime
+# (java.rmi.server.codebase = http://$host:$port/...); these are the boot jar,
+# the full local jar set, native middleware libs, and the screen config.
+COPY murex/jar/        /opt/murex/jar/
+COPY murex/bin/        /opt/murex/bin/
+COPY murex/mxjboot.jar /opt/murex/mxjboot.jar
+COPY murex/client.xml  /opt/murex/client.xml
+
+# Permissive policy (the launcher passes -Djava.security.policy) + our scripts.
+COPY docker/java.policy      /opt/murex/java.policy
+COPY docker/launch-client.sh /usr/local/bin/launch-client.sh
+COPY docker/entrypoint.sh    /usr/local/bin/entrypoint.sh
+# Strip any CRLF line endings (authored on Windows) and make executable.
+RUN sed -i 's/\r$//' /usr/local/bin/launch-client.sh /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/launch-client.sh /usr/local/bin/entrypoint.sh
+
+# Defaults; the harness overrides DISPLAY/SCREEN_GEOMETRY/MUREX_* via `docker run -e`.
+ENV DISPLAY=:99 \
+    SCREEN_GEOMETRY=1280x800 \
+    MUREX_CONTAINER_EXPORT_DIR=/exports \
+    MUREX_LLM_LOGIN=true
+VOLUME ["/exports"]
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
