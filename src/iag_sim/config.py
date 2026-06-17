@@ -24,15 +24,19 @@ class Settings(BaseSettings):
     # --- Model provider (computer-use) ---
     # Which API drives the computer-use loop. "openai" = Responses API (default,
     # unchanged); "anthropic" = direct Anthropic Messages API; "bedrock" = the same
-    # Messages API over AWS Bedrock. The execution layer (Computer / dispatch /
+    # Messages API over AWS Bedrock; "bedrock-openai" = a GPT model on AWS Bedrock via
+    # the OpenAI-compatible "mantle" Responses endpoint, which has NO native computer
+    # tool, so computer-use is emulated with a custom function tool (see
+    # cua/openai_custom_backend.py). The execution layer (Computer / dispatch /
     # harness) is provider-neutral; only the agent loop + client construction differ.
-    cua_provider: Literal["openai", "anthropic", "bedrock"] = Field(
+    cua_provider: Literal["openai", "anthropic", "bedrock", "bedrock-openai"] = Field(
         default="openai", alias="CUA_PROVIDER"
     )
     # The computer-use model id. Provider-specific:
-    #   openai    -> e.g. gpt-5.5 / computer-use-preview
-    #   anthropic -> e.g. claude-opus-4-8
-    #   bedrock   -> an inference-profile id, e.g. eu.anthropic.claude-opus-4-8
+    #   openai        -> e.g. gpt-5.5 / computer-use-preview
+    #   anthropic     -> e.g. claude-opus-4-8
+    #   bedrock       -> an inference-profile id, e.g. eu.anthropic.claude-opus-4-8
+    #   bedrock-openai -> a Bedrock OpenAI model id, e.g. openai.gpt-5.5
     cua_model: str = Field(default="gpt-5.5", alias="CUA_MODEL")
     # Completion-token budget per turn. The Anthropic Messages API REQUIRES
     # max_tokens; ignored by the OpenAI Responses loop.
@@ -52,6 +56,23 @@ class Settings(BaseSettings):
     # Optional explicit override of the OpenAI computer-use `environment`. If unset
     # it is derived per channel: web -> "browser", thick -> "ubuntu". OpenAI-only.
     cua_environment: str | None = Field(default=None, alias="CUA_ENVIRONMENT")
+    # OpenAI-compatible Responses base URL. Used (and REQUIRED) only by the
+    # "bedrock-openai" provider, where it points at the Bedrock mantle endpoint, e.g.
+    # https://bedrock-mantle.us-east-2.api.aws/openai/v1 . The OpenAI SDK appends
+    # "/responses"; auth is the Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK).
+    cua_openai_base_url: str | None = Field(default=None, alias="CUA_OPENAI_BASE_URL")
+    # Prompt-cache retention for the bedrock-openai provider. GPT-5.5 prompt caching is
+    # OFF unless this is sent (the "borked GPT-5 caching" gotcha): "in_memory" gave
+    # consistent ~90% hits on a stable resent prefix; "24h" flaked; automatic /
+    # previous_response_id / prompt_cache_key alone all returned cached=0. Empty/unset =
+    # no caching. Works WITH pruning: a stubbed screenshot stays a (byte-identical) stub
+    # forever, so the task preamble + already-pruned history form a stable cacheable
+    # prefix billed at 0.1x; only the last CUA_KEEP_LAST_SCREENSHOTS real images + the
+    # new one fall past the divergence and bill full. Only the bedrock-openai backend
+    # uses this.
+    cua_openai_prompt_cache_retention: str | None = Field(
+        default="in_memory", alias="CUA_OPENAI_PROMPT_CACHE_RETENTION"
+    )
 
     # Direct Anthropic credentials (required only when cua_provider == "anthropic").
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
@@ -277,6 +298,15 @@ class Settings(BaseSettings):
                 )
             if not self.aws_region:
                 raise ValueError("AWS_REGION is required when CUA_PROVIDER=bedrock")
+        if self.cua_provider == "bedrock-openai":
+            if self.aws_bearer_token_bedrock is None:
+                raise ValueError(
+                    "AWS_BEARER_TOKEN_BEDROCK is required when CUA_PROVIDER=bedrock-openai"
+                )
+            if not self.cua_openai_base_url:
+                raise ValueError(
+                    "CUA_OPENAI_BASE_URL is required when CUA_PROVIDER=bedrock-openai"
+                )
         return self
 
     def is_anthropic_provider(self) -> bool:

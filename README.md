@@ -63,6 +63,7 @@ Two engines, same work unit:
 | `src/iag_sim/cua/backend.py` | provider seam: `AgentBackend` + `build_backend` |
 | `src/iag_sim/cua/loop.py` + `openai_backend.py` | OpenAI computer-use loop (Responses API) |
 | `src/iag_sim/cua/anthropic_backend.py` | Anthropic/Bedrock loop (Messages API) |
+| `src/iag_sim/cua/openai_custom_backend.py` | GPT-on-Bedrock loop: custom-tool computer-use emulation |
 | `src/iag_sim/cua/anthropic_actions.py` | Anthropic action → canonical translator (pure) |
 | `src/iag_sim/harness/base.py` | `Harness` / `TradeSession` abstraction (channel seam) |
 | `src/iag_sim/harness/browser.py` | web channel: Playwright contexts |
@@ -103,12 +104,16 @@ Copy-Item .env.example .env   # then fill in real values
 ```
 
 `.env` (never commit — gitignored). Always:
-- `CUA_PROVIDER` (`openai` | `anthropic` | `bedrock`, default `openai`) + `CUA_MODEL`
-  (a computer-use-capable model for that provider, e.g. `gpt-5.5`,
-  `claude-opus-4-8`, or a Bedrock profile `eu.anthropic.claude-opus-4-8`)
+- `CUA_PROVIDER` (`openai` | `anthropic` | `bedrock` | `bedrock-openai`, default
+  `openai`) + `CUA_MODEL` (a computer-use-capable model for that provider, e.g.
+  `gpt-5.5`, `claude-opus-4-8`, a Bedrock profile `eu.anthropic.claude-opus-4-8`, or
+  a Bedrock OpenAI id `openai.gpt-5.5`)
 - provider credentials: `OPENAI_API_KEY` (openai) **or** `ANTHROPIC_API_KEY`
   (anthropic) **or** `AWS_REGION` + `AWS_BEARER_TOKEN_BEDROCK` (bedrock; a Bedrock
-  API key — no AWS access key/secret needed)
+  API key — no AWS access key/secret needed) **or** `AWS_BEARER_TOKEN_BEDROCK` +
+  `CUA_OPENAI_BASE_URL` (`bedrock-openai`; GPT on Bedrock via the mantle Responses
+  endpoint — computer-use is *emulated* with a custom function tool, no native tool
+  there, so grounding is weaker than Opus 4.8)
 - optional `CUA_REASONING_EFFORT` (`none|minimal|low|medium|high|xhigh|max`, model-
   dependent — the API validates) — applied to **any** provider; unset = provider
   default. OpenAI → `reasoning.effort`; Anthropic/Bedrock → adaptive thinking +

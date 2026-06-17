@@ -58,6 +58,39 @@ def build_backend(settings: Settings) -> AgentBackend:
             reasoning_effort=settings.cua_reasoning_effort,
         )
 
+    if provider == "bedrock-openai":
+        # GPT-5.x on AWS Bedrock via the OpenAI-compatible "mantle" Responses endpoint.
+        # Same bearer token as the Anthropic Bedrock path; the SDK sends it as
+        # `Authorization: Bearer` to `cua_openai_base_url`. No native computer tool is
+        # available there, so this backend emulates it with a custom function tool.
+        from openai import AsyncOpenAI
+
+        from .openai_custom_backend import OpenAICustomToolBackend
+
+        token = settings.aws_bearer_token_bedrock
+        if token is None:
+            raise ValueError(
+                "AWS_BEARER_TOKEN_BEDROCK is required for the bedrock-openai provider"
+            )
+        if not settings.cua_openai_base_url:
+            raise ValueError(
+                "CUA_OPENAI_BASE_URL is required for the bedrock-openai provider"
+            )
+        client = AsyncOpenAI(
+            base_url=settings.cua_openai_base_url,
+            api_key=token.get_secret_value(),
+            max_retries=settings.cua_max_retries,
+        )
+        return OpenAICustomToolBackend(
+            client=client,
+            model=settings.cua_model,
+            reasoning_effort=settings.cua_reasoning_effort,
+            max_output_tokens=settings.cua_max_tokens,
+            keep_last_screenshots=settings.cua_keep_last_screenshots,
+            transient_retries=settings.cua_max_retries,
+            prompt_cache_retention=settings.cua_openai_prompt_cache_retention,
+        )
+
     # "anthropic" and "bedrock" share the Messages-API backend; only the client differs.
     from .anthropic_backend import AnthropicBackend
 

@@ -90,7 +90,7 @@ a thick "after".
 **3. Provider seam (`cua/backend.py`).** An `AgentBackend` owns the model client +
 model id and runs the loop against a `Computer`; `simulate.py` calls `backend.run(...)`
 so the unit of work is identical across providers. `build_backend(settings)` picks
-the impl from `CUA_PROVIDER` (lazy per-provider client imports). Two impls, same
+the impl from `CUA_PROVIDER` (lazy per-provider client imports). Three impls, same
 `Computer`:
 - `cua/loop.py` + `cua/openai_backend.py` — OpenAI **Responses API** `computer`
   contract (computer_call → execute → screenshot back via `computer_call_output` →
@@ -107,8 +107,18 @@ the impl from `CUA_PROVIDER` (lazy per-provider client imports). Two impls, same
   screenshots are pruned (`CUA_KEEP_LAST_SCREENSHOTS`) to bound tokens. Tool
   generation defaults to `computer_20251124` / beta `computer-use-2025-11-24`
   (override via `CUA_ANTHROPIC_TOOL_VERSION` / `CUA_ANTHROPIC_BETA` for older models).
+- `cua/openai_custom_backend.py` — **custom-tool computer-use emulation** for GPT on
+  AWS Bedrock (`CUA_PROVIDER=bedrock-openai`): the mantle Responses endpoint
+  (`CUA_OPENAI_BASE_URL`, authed by the SAME `AWS_BEARER_TOKEN_BEDROCK` bearer)
+  exposes **no native `computer` tool**, so this declares ONE custom function tool
+  (`computer`, the canonical action vocab) and feeds screenshots as `input_image`.
+  Stateless like the Anthropic loop (no `previous_response_id`): output items are
+  echoed back, the post-action screenshot rides a fresh `user` message because a
+  Responses `function_call_output` is text-only, and older screenshots are pruned
+  (`CUA_KEEP_LAST_SCREENSHOTS`). **Caveat:** GPT is not GUI-grounding-fine-tuned, so
+  expect more mis-clicks on Murex's dense UI than Opus 4.8 / `computer-use-preview`.
 
-`cua/actions.py` is the pure action-dict → `Computer` dispatch shared by BOTH loops;
+`cua/actions.py` is the pure action-dict → `Computer` dispatch shared by ALL loops;
 `cua/base.py` is the dependency-free `Computer` protocol. The canonical action
 vocabulary is OpenAI-shaped; Anthropic actions (xdotool keysyms, `coordinate` pairs,
 `scroll_direction`/`scroll_amount`) are normalized to it in `anthropic_actions.py`.

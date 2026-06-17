@@ -196,6 +196,37 @@ def test_bedrock_provider_missing_token_raises(monkeypatch):
         _set(monkeypatch, CUA_PROVIDER="bedrock", AWS_REGION="eu-west-1")
 
 
+def test_bedrock_openai_provider_ok_with_token_and_base_url(monkeypatch):
+    s = _set(
+        monkeypatch, CUA_PROVIDER="bedrock-openai",
+        AWS_BEARER_TOKEN_BEDROCK="ABSK-token", CUA_MODEL="openai.gpt-5.5",
+        CUA_OPENAI_BASE_URL="https://bedrock-mantle.us-east-2.api.aws/openai/v1",
+    )
+    assert s.cua_provider == "bedrock-openai"
+    # OpenAI-shaped provider, NOT the Anthropic Messages family
+    assert s.is_anthropic_provider() is False
+
+
+def test_bedrock_openai_provider_missing_base_url_raises(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, CUA_PROVIDER="bedrock-openai", AWS_BEARER_TOKEN_BEDROCK="ABSK-token")
+
+
+def test_bedrock_openai_provider_missing_token_raises(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(
+            monkeypatch, CUA_PROVIDER="bedrock-openai",
+            CUA_OPENAI_BASE_URL="https://bedrock-mantle.us-east-2.api.aws/openai/v1",
+        )
+
+
+def test_prompt_cache_retention_default_and_override(monkeypatch):
+    s = _set(monkeypatch)
+    assert s.cua_openai_prompt_cache_retention == "in_memory"
+    s2 = _set(monkeypatch, CUA_OPENAI_PROMPT_CACHE_RETENTION="24h")
+    assert s2.cua_openai_prompt_cache_retention == "24h"
+
+
 def test_anthropic_tool_version_defaults_and_override(monkeypatch):
     s = _set(monkeypatch)
     assert s.cua_anthropic_tool_version == "computer_20251124"

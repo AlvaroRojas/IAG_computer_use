@@ -14,6 +14,7 @@ from iag_sim.cua.anthropic_backend import (
 )
 from iag_sim.cua.backend import build_backend
 from iag_sim.cua.openai_backend import OpenAIBackend
+from iag_sim.cua.openai_custom_backend import OpenAICustomToolBackend
 
 _BASE = {
     "MUREX_BEFORE_URL": "https://before",
@@ -57,6 +58,18 @@ def test_build_backend_bedrock(monkeypatch):
     b = build_backend(s)
     assert isinstance(b, AnthropicBackend)
     assert b.model == "eu.anthropic.claude-opus-4-8"
+
+
+def test_build_backend_bedrock_openai(monkeypatch):
+    s = _settings(
+        monkeypatch, CUA_PROVIDER="bedrock-openai",
+        AWS_BEARER_TOKEN_BEDROCK="ABSK-token", CUA_MODEL="openai.gpt-5.5",
+        CUA_OPENAI_BASE_URL="https://bedrock-mantle.us-east-2.api.aws/openai/v1",
+    )
+    b = build_backend(s)
+    assert isinstance(b, OpenAICustomToolBackend)
+    assert b.model == "openai.gpt-5.5"
+    assert b.prompt_cache_retention == "in_memory"  # default flows through
 
 
 # --- the Anthropic loop, driven by a fake client ---
