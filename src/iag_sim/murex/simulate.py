@@ -8,13 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openai import AsyncOpenAI
-
 from ..config import Settings
-from ..cua.loop import run_cua_loop
+from ..cua.backend import AgentBackend
 from ..cua.trace import Tracer
 from ..harness.base import Harness
 from ..models import TradeTask, WorkerResult
+from .export_validate import validate_export
 
 # Shared goal — appended after whichever login preamble applies. The navigation
 # is the exact path verified against the live Mx.3 UI (trade 594), so the model
@@ -113,7 +112,7 @@ async def simulate_trade(
     harness: Harness,
     trade: TradeTask,
     settings: Settings,
-    client: AsyncOpenAI,
+    backend: AgentBackend,
     run_dir: Path,
 ) -> WorkerResult:
     """Drive one (trade, env) simulation. Never raises for automation failures —
@@ -139,10 +138,8 @@ async def simulate_trade(
 
         try:
             width, height = session.display
-            result = await run_cua_loop(
-                client=client,
+            result = await backend.run(
                 computer=session.computer,
-                model=settings.cua_model,
                 task=_build_task(trade, env.value, settings),
                 display_width=width,
                 display_height=height,
@@ -151,7 +148,7 @@ async def simulate_trade(
                 tracer=tracer,
             )
 
-            export = await session.collect_export()
+            export = await session.collect_export(timeout=settings.export_wait_secs)
             if export is None:
                 tracer.event("error", phase="collect_export", error="no CSV was exported",
                              turns=result.turns, completed=result.completed)
@@ -160,11 +157,30 @@ async def simulate_trade(
                     error="no CSV was exported", turns=result.turns,
                 )
 
+            # Reality gate: prove the collected file is a real, non-empty, parseable
+            # CSV whose postings reference THIS trade before trusting it. A failure
+            # returns ok=False, which the tenacity retry in worker.py re-drives.
+            check = validate_export(
+                Path(export),
+                trade_id=trade.trade_id,
+                sep=settings.csv_delimiter,
+                min_rows=settings.export_min_rows,
+                require_trade_id=settings.export_require_trade_id,
+                trade_id_column=settings.export_trade_id_column,
+            )
+            if not check.ok:
+                tracer.event("error", phase="validate_export", error=check.reason,
+                             turns=result.turns, completed=result.completed)
+                return WorkerResult(
+                    trade_id=trade.trade_id, env=env, ok=False,
+                    error=check.reason, turns=result.turns,
+                )
+
             target = run_dir / env.value / trade.trade_id / "export.csv"
             target.parent.mkdir(parents=True, exist_ok=True)
             if Path(export) != target:
                 target.write_bytes(Path(export).read_bytes())
-            tracer.event("export_ok", csv=str(target), turns=result.turns)
+            tracer.event("export_ok", csv=str(target), rows=check.rows, turns=result.turns)
             return WorkerResult(
                 trade_id=trade.trade_id, env=env, ok=True,
                 csv_path=str(target), turns=result.turns,

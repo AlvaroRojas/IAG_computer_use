@@ -28,7 +28,7 @@ async def _simulate_with_retry(res: Resources, trade: TradeTask, env: EnvName) -
         harness=res.harness_for(env),
         trade=trade,
         settings=res.settings,
-        client=res.client,
+        backend=res.backend,
         run_dir=res.run_dir,
     )
 

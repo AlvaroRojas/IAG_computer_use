@@ -20,13 +20,25 @@ from .base import Harness, TradeSession
 
 
 class BrowserSession:
-    def __init__(self, context, page, computer: PlaywrightComputer, display: tuple[int, int]):
+    def __init__(
+        self,
+        context,
+        page,
+        computer: PlaywrightComputer,
+        display: tuple[int, int],
+        poll: float = 0.25,
+    ):
         self._context = context
         self._page = page
         self.computer = computer
         self.display = display
+        self._poll = poll
 
-    async def collect_export(self) -> Path | None:
+    async def collect_export(self, timeout: float = 0.0) -> Path | None:
+        # Wait for the download event to land (the model's last action may fire it
+        # just as the loop returns), then persist it. save_as resolves only on a
+        # COMPLETED browser download, so a returned path is a real file.
+        await self.computer.wait_for_download(timeout, poll=self._poll)
         saved = await self.computer.flush_downloads()
         return saved[-1] if saved else None
 
@@ -67,6 +79,9 @@ class BrowserHarness(Harness):
         ctx_kwargs: dict = {
             "viewport": {"width": s.display_width, "height": s.display_height},
             "accept_downloads": True,
+            # On-prem Murex serves a self-signed cert; without this, navigation
+            # aborts with ERR_CERT_AUTHORITY_INVALID.
+            "ignore_https_errors": s.murex_ignore_https_errors,
         }
         # Deterministic-login mode reuses the saved authenticated session;
         # LLM-login mode starts cold so the model sees the login page.
@@ -77,8 +92,16 @@ class BrowserHarness(Harness):
         context = await self.browser.new_context(**ctx_kwargs)
         page = await context.new_page()
         await page.goto(s.url_for(self.env.value), wait_until="domcontentloaded")
-        computer = PlaywrightComputer(page, download_dir)
-        return BrowserSession(context, page, computer, (s.display_width, s.display_height))
+        computer = PlaywrightComputer(
+            page,
+            download_dir,
+            click_delay_ms=s.cua_web_click_delay_ms,
+            settle_ms=s.cua_web_settle_ms,
+        )
+        return BrowserSession(
+            context, page, computer, (s.display_width, s.display_height),
+            poll=s.export_poll_secs,
+        )
 
     async def aclose(self) -> None:
         # The browser is owned by Resources; nothing per-harness to release.

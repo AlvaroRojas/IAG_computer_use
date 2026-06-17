@@ -13,7 +13,7 @@ from iag_sim.orchestration.resources import Resources
 def _fake_resources(tmp_path: Path) -> Resources:
     return Resources(
         settings=None,  # not touched at compile time
-        client=None,
+        backend=None,
         run_dir=tmp_path,
         semaphores={"before": asyncio.Semaphore(1), "after": asyncio.Semaphore(1)},
         harnesses={},

@@ -104,6 +104,26 @@ def test_playwright_memory_cap_default(monkeypatch):
     assert s.playwright_max_memory_mb == 512
 
 
+def test_ignore_https_errors_defaults_true_and_override(monkeypatch):
+    # On-prem Murex serves a self-signed cert, so the default must be permissive.
+    assert _set(monkeypatch).murex_ignore_https_errors is True
+    assert (
+        _set(monkeypatch, MUREX_IGNORE_HTTPS_ERRORS="false").murex_ignore_https_errors
+        is False
+    )
+
+
+def test_web_interaction_tuning_defaults_and_override(monkeypatch):
+    # Web-SPA click delay + settle pause; non-zero defaults so the web channel
+    # registers widget clicks and screenshots settled frames out of the box.
+    s = _set(monkeypatch)
+    assert s.cua_web_click_delay_ms == 60
+    assert s.cua_web_settle_ms == 400
+    o = _set(monkeypatch, CUA_WEB_CLICK_DELAY_MS="0", CUA_WEB_SETTLE_MS="250")
+    assert o.cua_web_click_delay_ms == 0
+    assert o.cua_web_settle_ms == 250
+
+
 def test_login_group_defaults_empty(monkeypatch):
     s = _set(monkeypatch)
     assert s.group_for("before") == ""
@@ -125,3 +145,133 @@ def test_login_group_per_env_override_wins(monkeypatch):
     )
     assert s.group_for("before") == "GLOBAL"
     assert s.group_for("after") == "AFTER_DESK"
+
+
+# --- Model provider selection + per-provider credential fail-fast ---
+
+
+def test_provider_defaults_to_openai(monkeypatch):
+    s = _set(monkeypatch)
+    assert s.cua_provider == "openai"
+    assert s.is_anthropic_provider() is False
+
+
+def test_openai_provider_requires_openai_key(monkeypatch):
+    for k in REQUIRED:
+        monkeypatch.delenv(k, raising=False)
+    # provide the non-secret required fields, omit OPENAI_API_KEY
+    for k, v in {k: v for k, v in REQUIRED.items() if k != "OPENAI_API_KEY"}.items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_anthropic_provider_requires_key(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, CUA_PROVIDER="anthropic")
+
+
+def test_anthropic_provider_ok_with_key(monkeypatch):
+    s = _set(monkeypatch, CUA_PROVIDER="anthropic", ANTHROPIC_API_KEY="ak-test")
+    assert s.cua_provider == "anthropic"
+    assert s.is_anthropic_provider() is True
+
+
+def test_bedrock_provider_ok_with_token_and_region(monkeypatch):
+    s = _set(
+        monkeypatch, CUA_PROVIDER="bedrock",
+        AWS_REGION="eu-west-1", AWS_BEARER_TOKEN_BEDROCK="ABSK-token",
+    )
+    assert s.cua_provider == "bedrock"
+    assert s.is_anthropic_provider() is True
+
+
+def test_bedrock_provider_missing_region_raises(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, CUA_PROVIDER="bedrock", AWS_BEARER_TOKEN_BEDROCK="ABSK-token")
+
+
+def test_bedrock_provider_missing_token_raises(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, CUA_PROVIDER="bedrock", AWS_REGION="eu-west-1")
+
+
+def test_anthropic_tool_version_defaults_and_override(monkeypatch):
+    s = _set(monkeypatch)
+    assert s.cua_anthropic_tool_version == "computer_20251124"
+    assert s.cua_anthropic_beta == "computer-use-2025-11-24"
+    s2 = _set(
+        monkeypatch,
+        CUA_ANTHROPIC_TOOL_VERSION="computer_20250124",
+        CUA_ANTHROPIC_BETA="computer-use-2025-01-24",
+    )
+    assert s2.cua_anthropic_tool_version == "computer_20250124"
+    assert s2.cua_anthropic_beta == "computer-use-2025-01-24"
+
+
+def test_invalid_provider_rejected(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, CUA_PROVIDER="gemini")
+
+
+def test_reasoning_effort_defaults_none_and_override(monkeypatch):
+    assert _set(monkeypatch).cua_reasoning_effort is None
+    assert _set(monkeypatch, CUA_REASONING_EFFORT="high").cua_reasoning_effort == "high"
+
+
+def test_invalid_reasoning_effort_rejected(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, CUA_REASONING_EFFORT="ludicrous")
+
+
+def test_reasoning_effort_accepts_xhigh_and_max(monkeypatch):
+    assert _set(monkeypatch, CUA_REASONING_EFFORT="xhigh").cua_reasoning_effort == "xhigh"
+    # normalized to lowercase
+    assert _set(monkeypatch, CUA_REASONING_EFFORT="MAX").cua_reasoning_effort == "max"
+
+
+def test_prompt_cache_defaults_true_and_override(monkeypatch):
+    assert _set(monkeypatch).cua_prompt_cache is True
+    assert _set(monkeypatch, CUA_PROMPT_CACHE="false").cua_prompt_cache is False
+
+
+def test_max_retries_defaults_and_override(monkeypatch):
+    assert _set(monkeypatch).cua_max_retries == 8
+    assert _set(monkeypatch, CUA_MAX_RETRIES="3").cua_max_retries == 3
+
+
+# --- Export reality gate ---
+
+
+def test_export_gate_defaults(monkeypatch):
+    s = _set(monkeypatch)
+    assert s.export_wait_secs == 20
+    assert s.export_poll_secs == 0.5
+    assert s.export_stable_polls == 2
+    assert s.export_min_rows == 1
+    assert s.export_require_trade_id is True
+    assert s.export_trade_id_column == "BO origin ref"
+
+
+def test_export_gate_overrides(monkeypatch):
+    s = _set(
+        monkeypatch,
+        EXPORT_WAIT_SECS="5",
+        EXPORT_MIN_ROWS="2",
+        EXPORT_REQUIRE_TRADE_ID="false",
+        EXPORT_TRADE_ID_COLUMN="Trade ref",
+    )
+    assert s.export_wait_secs == 5
+    assert s.export_min_rows == 2
+    assert s.export_require_trade_id is False
+    assert s.export_trade_id_column == "Trade ref"
+
+
+def test_export_poll_secs_must_be_positive(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, EXPORT_POLL_SECS="0")
+
+
+def test_export_wait_secs_non_negative(monkeypatch):
+    with pytest.raises(ValidationError):
+        _set(monkeypatch, EXPORT_WAIT_SECS="-1")

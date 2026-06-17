@@ -35,6 +35,8 @@ def _now() -> str:
 _ECHO_KEYS = (
     "type", "x", "y", "button", "keys", "scroll_x", "scroll_y", "n",
     "wait_ms", "duration_ms", "ms",
+    # per-turn token usage (cache_read/cache_write surface prompt-cache hits live)
+    "input", "output", "cache_read", "cache_write",
 )
 
 # Stdout/run.log echo goes through the shared run logger so each line is

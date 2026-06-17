@@ -94,6 +94,7 @@ async def run_cua_loop(
     environment: str = "browser",
     max_turns: int = 60,
     on_safety_check: SafetyHandler = _deny,
+    reasoning_effort: str | None = None,
     tracer: Tracer | NullTracer | None = None,
 ) -> LoopResult:
     """Drive `computer` to accomplish `task` using the computer-use model.
@@ -119,9 +120,14 @@ async def run_cua_loop(
     else:
         tool = {"type": "computer"}
 
+    # Reasoning effort -> Responses API reasoning.effort. Unset = provider default
+    # (nothing sent). Applied to every create() call below.
+    reasoning = {"effort": reasoning_effort} if reasoning_effort else None
+
     tracer.event(
         "session_start", model=model, environment=environment,
         tool=tool["type"], max_turns=max_turns, task_chars=len(task),
+        effort=reasoning_effort,
     )
 
     first_shot = await computer.screenshot()
@@ -141,6 +147,7 @@ async def run_cua_loop(
                 ],
             }
         ],
+        **({"reasoning": reasoning} if reasoning else {}),
     )
 
     for turn in range(1, max_turns + 1):
@@ -190,6 +197,7 @@ async def run_cua_loop(
             tools=[tool],
             input=[output_item],
             previous_response_id=response.id,
+            **({"reasoning": reasoning} if reasoning else {}),
         )
 
     final = _final_text(response)

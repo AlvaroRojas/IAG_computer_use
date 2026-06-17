@@ -39,7 +39,10 @@ async def login_and_save_state(
     state_path = state_dir / f"{env.value}_state.json"
 
     context = await browser.new_context(
-        viewport={"width": settings.display_width, "height": settings.display_height}
+        viewport={"width": settings.display_width, "height": settings.display_height},
+        # Match the worker contexts: on-prem Murex's self-signed cert would
+        # otherwise abort this pre-auth navigation with ERR_CERT_AUTHORITY_INVALID.
+        ignore_https_errors=settings.murex_ignore_https_errors,
     )
     page = await context.new_page()
     try:

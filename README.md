@@ -5,8 +5,9 @@ accounting output. For *N* trades, it runs the **accounting simulation** in a
 **before-changes** and an **after-changes** Murex environment, exports each
 result to CSV, aggregates into two CSVs, and **diffs them deterministically**.
 
-Murex is driven by OpenAI **computer-use** (Responses API `computer` tool)
-through one of two interchangeable **channels**:
+Murex is driven by a **computer-use model** — OpenAI (Responses API `computer`
+tool) or Anthropic / AWS Bedrock (Messages API `computer` tool), chosen with
+`CUA_PROVIDER` — through one of two interchangeable **channels**:
 
 | Channel | Driver | Parallelism | `environment` |
 |---------|--------|-------------|---------------|
@@ -19,6 +20,10 @@ Both are first-class. Pick globally with `MUREX_CHANNEL`, or per environment
 comparison is plain, reproducible Python (`pandas` + `datacompy`). **The LLM
 never computes the diff.**
 
+The `environment` column is OpenAI's `computer` tool hint; the Anthropic backend
+ignores it. The provider is orthogonal to the channel — any provider drives any
+channel through the same `Computer` interface (provider seam: `cua/backend.py`).
+
 ## Architecture
 
 ```
@@ -30,6 +35,7 @@ trades.csv
    │          └─ thick channel: `docker run` a Murex-client container (Xvfb + xdotool)
    │          computer-use loop: model emits actions → Computer executes
    │          → screenshot back → … → CSV exported
+   │          reality gate: real, non-empty CSV for THIS trade (else retry) ◀─ not the model's word
    ▼
  aggregate (pandas) ──▶ before_aggregated.csv / after_aggregated.csv
    ▼
@@ -52,18 +58,40 @@ Two engines, same work unit:
 | `src/iag_sim/config.py` | env/.env settings, channel resolution, validated at startup |
 | `src/iag_sim/models.py` | `TradeTask`, `WorkerResult`, `EnvName` |
 | `src/iag_sim/cua/base.py` | `Computer` protocol (no deps) |
-| `src/iag_sim/cua/actions.py` | action dict → `Computer` call (pure) |
+| `src/iag_sim/cua/actions.py` | canonical action dict → `Computer` call (pure, shared) |
 | `src/iag_sim/cua/computer.py` | `PlaywrightComputer` (browser + downloads) |
-| `src/iag_sim/cua/loop.py` | the computer-use agent loop (Responses API) |
+| `src/iag_sim/cua/backend.py` | provider seam: `AgentBackend` + `build_backend` |
+| `src/iag_sim/cua/loop.py` + `openai_backend.py` | OpenAI computer-use loop (Responses API) |
+| `src/iag_sim/cua/anthropic_backend.py` | Anthropic/Bedrock loop (Messages API) |
+| `src/iag_sim/cua/anthropic_actions.py` | Anthropic action → canonical translator (pure) |
 | `src/iag_sim/harness/base.py` | `Harness` / `TradeSession` abstraction (channel seam) |
 | `src/iag_sim/harness/browser.py` | web channel: Playwright contexts |
 | `src/iag_sim/harness/docker.py` | thick channel: `DockerComputer` + `DockerHarness` |
 | `src/iag_sim/murex/login.py` | web channel per-env login → saved `storage_state` |
 | `src/iag_sim/murex/simulate.py` | run one trade's simulation → CSV path |
+| `src/iag_sim/murex/export_validate.py` | reality gate: validate the exported CSV (pure) |
 | `src/iag_sim/aggregate.py` | concat per-trade CSVs (pure core) |
 | `src/iag_sim/diff.py` | datacompy before/after compare (pure) |
 | `src/iag_sim/orchestration/` | resources, worker (+retry), runner, graph, postprocess |
 | `src/iag_sim/cli.py` | `iag-sim run` |
+
+## Prerequisites (deployment machine)
+
+Host requirements depend on which **channel(s)** you run. The channel is the only
+thing that changes the machine footprint — the provider (OpenAI / Anthropic /
+Bedrock) is just an API client and adds no host dependency beyond credentials.
+
+| Run | Host needs | Does **not** need |
+|-----|------------|-------------------|
+| **web** | Python 3.12, `playwright install chromium` | Docker |
+| **thick** | Python 3.12, a running **Docker daemon** (Desktop/Engine) + socket access, a built/supplied `MUREX_DOCKER_IMAGE` | Chromium |
+| **mixed** (web one env, thick the other) | both of the above | — |
+| **tests** | Python 3.12 only | browser, Docker, network |
+
+Python **3.12** is a hard floor. The thick channel shells out to the `docker`
+CLI, so the daemon must be running and reachable by the user that launches the
+run (one `docker run -d --rm` container per trade). The web channel launches one
+shared Chromium with N contexts — no Docker.
 
 ## Setup
 
@@ -75,7 +103,17 @@ Copy-Item .env.example .env   # then fill in real values
 ```
 
 `.env` (never commit — gitignored). Always:
-- `OPENAI_API_KEY`, `CUA_MODEL` (a computer-use-capable model, e.g. `gpt-5.5`)
+- `CUA_PROVIDER` (`openai` | `anthropic` | `bedrock`, default `openai`) + `CUA_MODEL`
+  (a computer-use-capable model for that provider, e.g. `gpt-5.5`,
+  `claude-opus-4-8`, or a Bedrock profile `eu.anthropic.claude-opus-4-8`)
+- provider credentials: `OPENAI_API_KEY` (openai) **or** `ANTHROPIC_API_KEY`
+  (anthropic) **or** `AWS_REGION` + `AWS_BEARER_TOKEN_BEDROCK` (bedrock; a Bedrock
+  API key — no AWS access key/secret needed)
+- optional `CUA_REASONING_EFFORT` (`none|minimal|low|medium|high|xhigh|max`, model-
+  dependent — the API validates) — applied to **any** provider; unset = provider
+  default. OpenAI → `reasoning.effort`; Anthropic/Bedrock → adaptive thinking +
+  `output_config.effort` (newest models) or `budget_tokens` (older). `xhigh` = Opus
+  only; `max` = Sonnet 4.6+/Opus. Raise `CUA_MAX_TOKENS` for high+ effort.
 - `MUREX_BEFORE_URL`, `MUREX_AFTER_URL`, `MUREX_USER`, `MUREX_PASS`
 - `MUREX_CHANNEL` (`web` | `thick`), optional `MUREX_BEFORE_CHANNEL` / `MUREX_AFTER_CHANNEL`
 - `MAX_CONCURRENCY`, `DISPLAY_WIDTH/HEIGHT`, `MAX_TURNS`, `DIFF_JOIN_COLUMNS`, `DIFF_ABS_TOL`
@@ -131,9 +169,11 @@ command construction (via a fake runner), and LangGraph wiring.
 This scaffold is complete and tested, but a few things depend on the **actual
 Murex UI** and must be confirmed once (per the plan's pre-build steps):
 
-1. **CSV schema → diff key** (both channels) — open a real exported CSV and set
-   `DIFF_JOIN_COLUMNS` (columns that uniquely identify a posting) and
-   `DIFF_ABS_TOL`. Defaults (`trade_id,gl_account,currency`, `0.01`) are a guess.
+1. **CSV schema → diff key + export gate** (both channels) — open a real exported
+   CSV and set `DIFF_JOIN_COLUMNS` (columns that uniquely identify a posting) and
+   `DIFF_ABS_TOL` (defaults `trade_id,gl_account,currency`, `0.01` are a guess). On
+   the same file confirm `CSV_DELIMITER` and that `EXPORT_TRADE_ID_COLUMN`
+   ("BO origin ref") is the column the export reality gate matches every row against.
 2. **Web channel: login selectors** — `src/iag_sim/murex/login.py` has
    **placeholder** selectors (`USERNAME_SELECTOR`, `PASSWORD_SELECTOR`,
    `SUBMIT_SELECTOR`, `LOGGED_IN_SELECTOR`). Walk the real login page once and
@@ -142,12 +182,25 @@ Murex UI** and must be confirmed once (per the plan's pre-build steps):
    honouring the contract above and tune `MUREX_CONTAINER_READY_SECS` to the
    client's real startup + login time.
 
-Also verify `CUA_MODEL` is a computer-use-capable model available on your key
-(live contract: https://developers.openai.com/api/docs/guides/tools-computer-use).
+Also verify `CUA_MODEL` is a computer-use-capable model for your `CUA_PROVIDER`
+and available on your key/account (OpenAI:
+https://developers.openai.com/api/docs/guides/tools-computer-use; Anthropic/Bedrock:
+the `computer_20251124` tool + `computer-use-2025-11-24` beta — for older Bedrock
+models set `CUA_ANTHROPIC_TOOL_VERSION` / `CUA_ANTHROPIC_BETA`).
 
 ### Cost / reliability note
 Computer-use screenshots are token-heavy; `N × 2` sessions add up. For stable
 steps (web: login/navigation/export click) prefer recorded **deterministic
 Playwright actions** and reserve vision for the genuinely variable in-screen
-work. Bound `MAX_CONCURRENCY` to stay under OpenAI TPM/RPM and (thick channel)
-host CPU/RAM — each container is a full desktop.
+work. Bound `MAX_CONCURRENCY` to stay under your provider's rate limits (OpenAI
+TPM/RPM, Anthropic/Bedrock token+request caps) and (thick channel) host CPU/RAM —
+each container is a full desktop.
+
+**Prompt caching** is on by default to make long sessions cheaper. OpenAI caches
+the prefix automatically (the Responses loop chains turns with
+`previous_response_id`); Anthropic/Bedrock insert `cache_control` breakpoints (a
+static one on the tool def + a rolling one anchored at the screenshot-prune
+frontier) so the byte-stable prefix bills at the 0.1× cache-read rate after the
+first turn. Disable with `CUA_PROMPT_CACHE=false`; per-turn `cache_read` /
+`cache_write` token counts are emitted to the live trace. Raising
+`CUA_KEEP_LAST_SCREENSHOTS` enlarges the cacheable prefix.

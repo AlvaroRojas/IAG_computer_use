@@ -16,7 +16,7 @@ from iag_sim.orchestration.resources import Resources
 
 def _fake_resources(tmp_path: Path) -> Resources:
     return Resources(
-        settings=None, client=None, run_dir=tmp_path, semaphores={}, harnesses={}
+        settings=None, backend=None, run_dir=tmp_path, semaphores={}, harnesses={}
     )
 
 

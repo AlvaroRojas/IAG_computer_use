@@ -27,8 +27,13 @@ class TradeSession(Protocol):
     computer: Computer
     display: tuple[int, int]  # (width, height) the model should assume
 
-    async def collect_export(self) -> Path | None:
-        """Return the CSV produced by this session's simulation, or None."""
+    async def collect_export(self, timeout: float = 0.0) -> Path | None:
+        """Return the CSV produced by this session's simulation, or None.
+
+        `timeout` (seconds) bounds how long to wait for the export to APPEAR — the
+        model's last action may trigger the download/file write just as the agent
+        loop returns. 0 = check once, no wait.
+        """
         ...
 
     async def close(self) -> None: ...

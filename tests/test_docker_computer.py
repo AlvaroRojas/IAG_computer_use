@@ -188,6 +188,58 @@ async def test_collect_export_none_without_runner(tmp_path):
     assert await _session(tmp_path, runner=None).collect_export() is None
 
 
+def _stable_session(host_export: Path, poll=0.01, stable_polls=2) -> DockerSession:
+    return DockerSession(
+        "cid123", computer=None, display=(1280, 800), host_export=host_export,
+        stop=_noop_stop, runner=FakeRunner(), container_export_dir="/exports",
+        poll=poll, stable_polls=stable_polls,
+    )
+
+
+async def test_collect_export_waits_for_appearance(tmp_path, monkeypatch):
+    # File is absent at first; it shows up after the first poll. With timeout the
+    # session must wait for it instead of immediately reporting nothing.
+    import asyncio
+
+    target = tmp_path / "accounting_594.csv"
+    state = {"n": 0}
+
+    async def _sleep(_secs):
+        state["n"] += 1
+        if state["n"] == 1:
+            target.write_text("a;b\n1;2\n", encoding="utf-8")
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    got = await _stable_session(tmp_path, stable_polls=1).collect_export(timeout=5)
+    assert got == target
+
+
+async def test_collect_export_waits_for_size_stability(tmp_path, monkeypatch):
+    # File present but only returned once its size is stable for stable_polls polls.
+    import asyncio
+
+    (tmp_path / "accounting_594.csv").write_text("a;b\n1;2\n", encoding="utf-8")
+
+    async def _sleep(_secs):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    got = await _stable_session(tmp_path, stable_polls=2).collect_export(timeout=5)
+    assert got == tmp_path / "accounting_594.csv"
+
+
+async def test_new_session_clears_stale_csv(tmp_path):
+    # A bad CSV from a prior attempt for THIS trade must not survive into the next
+    # attempt — host_export is per-trade and reused, and collect_export globs it.
+    trade_dir = tmp_path / "before" / "594"
+    trade_dir.mkdir(parents=True)
+    stale = trade_dir / "old.csv"
+    stale.write_text("a;b\n1;2\n", encoding="utf-8")
+    h = _thick_harness(tmp_path, RunStopRunner("cidAA"))
+    await h.new_session(TradeTask(trade_id="594"))
+    assert not stale.exists()
+
+
 # --- container teardown: process death must not orphan containers -------------
 
 

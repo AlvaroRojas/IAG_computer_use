@@ -1,5 +1,5 @@
-"""Non-serializable runtime resources shared by workers (harnesses, OpenAI
-client, concurrency gate). Created once per run via `open_resources` and passed
+"""Non-serializable runtime resources shared by workers (harnesses, model-provider
+backend, concurrency gate). Created once per run via `open_resources` and passed
 to engines through closures — never placed in checkpointed graph state.
 
 A harness is built per environment from its channel:
@@ -15,9 +15,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from openai import AsyncOpenAI
-
 from ..config import Settings
+from ..cua.backend import AgentBackend, build_backend
 from ..harness.base import Harness
 from ..harness.browser import BrowserHarness
 from ..harness.docker import DockerHarness
@@ -27,7 +26,7 @@ from ..models import EnvName
 @dataclass
 class Resources:
     settings: Settings
-    client: AsyncOpenAI
+    backend: AgentBackend
     run_dir: Path
     # PER-ENVIRONMENT concurrency budgets: "before" and "after" each get their
     # own semaphore sized to MAX_CONCURRENCY, so a slow side never starves the
@@ -48,7 +47,7 @@ async def open_resources(settings: Settings, run_dir: Path):
     """Build harnesses for both environments, log in / verify, and yield
     Resources. Everything is torn down on exit."""
     run_dir.mkdir(parents=True, exist_ok=True)
-    client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+    backend = build_backend(settings)
 
     channels = {env: settings.channel_for(env.value) for env in (EnvName.BEFORE, EnvName.AFTER)}
     needs_browser = "web" in channels.values()
@@ -86,7 +85,7 @@ async def open_resources(settings: Settings, run_dir: Path):
 
         yield Resources(
             settings=settings,
-            client=client,
+            backend=backend,
             run_dir=run_dir,
             semaphores={
                 env.value: asyncio.Semaphore(settings.effective_concurrency())

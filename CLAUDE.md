@@ -9,9 +9,11 @@ Murex *accounting simulation* in a **before-changes** and an **after-changes**
 environment, exports each result to CSV, aggregates, and **diffs them
 deterministically** to prove a config change did not alter accounting output.
 
-Murex is driven by the OpenAI **computer-use** tool (Responses API `computer`)
-over one of two interchangeable **channels** (see Architecture). Read `README.md`
-for the user-facing overview; this file is the working contract for editing.
+Murex is driven by a **computer-use model** — OpenAI (Responses API `computer`)
+or Anthropic / AWS Bedrock (Messages API `computer` tool), selected by
+`CUA_PROVIDER` behind a provider-neutral **backend seam** (`cua/backend.py`) — over
+one of two interchangeable **channels** (see Architecture). Read `README.md` for
+the user-facing overview; this file is the working contract for editing.
 
 ## Commands
 
@@ -85,12 +87,53 @@ a thick "after".
 
 ### Computer-use loop (`cua/`)
 
-`cua/loop.py` implements the Responses API `computer` tool contract (computer_call →
-execute actions → screenshot back via `computer_call_output` → carry
-`previous_response_id` until no computer_call returns). `cua/actions.py` is the pure
-action-dict → `Computer` dispatch; `cua/base.py` is the dependency-free `Computer`
-protocol. Safety checks are acknowledged through an injected `on_safety_check`
-callback (default: deny).
+**3. Provider seam (`cua/backend.py`).** An `AgentBackend` owns the model client +
+model id and runs the loop against a `Computer`; `simulate.py` calls `backend.run(...)`
+so the unit of work is identical across providers. `build_backend(settings)` picks
+the impl from `CUA_PROVIDER` (lazy per-provider client imports). Two impls, same
+`Computer`:
+- `cua/loop.py` + `cua/openai_backend.py` — OpenAI **Responses API** `computer`
+  contract (computer_call → execute → screenshot back via `computer_call_output` →
+  carry `previous_response_id` until no computer_call returns). Safety checks via an
+  injected `on_safety_check` callback (default: deny).
+- `cua/anthropic_backend.py` — Anthropic **Messages API** loop (direct Anthropic OR
+  AWS Bedrock — the client differs, the loop is identical: `AsyncAnthropic` vs
+  `AsyncAnthropicBedrock`, the latter authed by a Bedrock API key in
+  `AWS_BEARER_TOKEN_BEDROCK`). Stateless: a growing `messages` list (no
+  `previous_response_id`). Each `tool_use` action is translated by
+  `cua/anthropic_actions.py` into the SAME canonical action dicts and run through
+  `cua/actions.py`; the post-action screenshot is fed back as a `tool_result` image.
+  Assistant content (incl. thinking blocks) is echoed back verbatim; older
+  screenshots are pruned (`CUA_KEEP_LAST_SCREENSHOTS`) to bound tokens. Tool
+  generation defaults to `computer_20251124` / beta `computer-use-2025-11-24`
+  (override via `CUA_ANTHROPIC_TOOL_VERSION` / `CUA_ANTHROPIC_BETA` for older models).
+
+`cua/actions.py` is the pure action-dict → `Computer` dispatch shared by BOTH loops;
+`cua/base.py` is the dependency-free `Computer` protocol. The canonical action
+vocabulary is OpenAI-shaped; Anthropic actions (xdotool keysyms, `coordinate` pairs,
+`scroll_direction`/`scroll_amount`) are normalized to it in `anthropic_actions.py`.
+
+**Reasoning effort** is one knob across providers: `CUA_REASONING_EFFORT`
+(`none|minimal|low|medium|high|xhigh|max`, unset = provider default; the API
+validates per-model availability) maps to OpenAI `reasoning.effort` and, on
+Anthropic/Bedrock, to **adaptive thinking** (`thinking:{type:"adaptive"}`) + a
+top-level `output_config.effort` on the newest gen (tool `computer_20251124`;
+manual `budget_tokens` is a 400 on Opus 4.8/4.7), falling back to manual
+`budget_tokens` for older models (tool `computer_20250124`, e.g. Sonnet 4.5). **Scroll** deltas are canonical **wheel notches**:
+the thick channel consumes them 1:1 (`xdotool click --repeat`), the browser scales
+notches→pixels (`_WHEEL_PX_PER_NOTCH`) — no per-channel env knob.
+
+**Prompt caching** (`CUA_PROMPT_CACHE`, default on) is automatic for OpenAI (the
+Responses loop chains `previous_response_id`, so the prefix is cached server-side —
+no code) and `cache_control`-driven for Anthropic/Bedrock (stateless Messages API).
+The latter sets a static breakpoint on the tool def + ONE rolling breakpoint
+anchored at the **screenshot-prune frontier** (`_cache_anchor`): pruning mutates an
+old image→stub roughly every turn, so anchoring at the newest message would pay the
+1.25× cache-write penalty with no read; anchoring strictly before the oldest still-
+real screenshot keeps the cached prefix byte-stable across turns. Never put
+`cache_control` on assistant blocks (SDK objects echoed verbatim — mutating them
+breaks the thinking-block signature contract). Per-turn `cache_read`/`cache_write`
+counts go to the trace (`usage` event).
 
 ## Invariants — do not break these
 
@@ -113,6 +156,17 @@ callback (default: deny).
 - **`simulate_trade` never raises for automation failures** — it returns
   `WorkerResult(ok=False, error=…)` so the orchestrator can record/retry.
   `worker.py` retries on `not result.ok` (tenacity, 3 attempts, exponential backoff).
+- **An export is trusted only when it's a real artifact, never the model's word.**
+  The model's "DONE" text is never a success signal — success requires a CSV on disk
+  that passes the reality gate (`murex/export_validate.py`): exists, non-empty, parses
+  with `CSV_DELIMITER`, has ≥ `EXPORT_MIN_ROWS` rows, and every row's
+  `EXPORT_TRADE_ID_COLUMN` ("BO origin ref") equals the trade id. `collect_export`
+  first WAITS up to `EXPORT_WAIT_SECS` for the file/download to appear (web: the
+  Playwright download event; thick: the bind-mounted file, size-stable for
+  `EXPORT_STABLE_POLLS` polls), since the model's last action can fire it just as the
+  loop returns. A failed check returns `ok=False` and rides the SAME tenacity retry —
+  no separate retry path. Thick reuses one per-trade export dir across attempts, so
+  `new_session` clears stale `*.csv` first. Don't reintroduce trusting `final_text`.
 - **Runtime resources are non-serializable and passed via closures** (`resources.py`),
   never placed in checkpointed graph state. Playwright launches only if some env uses
   the web channel.
@@ -135,9 +189,11 @@ callback (default: deny).
 
 The scaffold is complete and tested, but three things depend on the **actual Murex
 UI** and are currently placeholders/guesses:
-1. **Diff key** — open a real exported CSV; set `DIFF_JOIN_COLUMNS` (columns that
-   uniquely identify a posting) and `DIFF_ABS_TOL`. Defaults
-   (`trade_id,gl_account,currency`, `0.01`) are a guess.
+1. **Diff key + export gate columns** — open a real exported CSV; set
+   `DIFF_JOIN_COLUMNS` (columns that uniquely identify a posting) and `DIFF_ABS_TOL`
+   (defaults `trade_id,gl_account,currency`, `0.01` are a guess). On the same CSV,
+   confirm `CSV_DELIMITER` and that `EXPORT_TRADE_ID_COLUMN` ("BO origin ref") is the
+   column carrying the trade reference — the reality gate matches every row against it.
 2. **Web login** — deterministic mode: set the placeholder selectors in
    `murex/login.py` against the real login page. LLM-login mode (`MUREX_LLM_LOGIN=true`):
    no selectors needed — the model logs in; tune the login wording in `simulate.py`

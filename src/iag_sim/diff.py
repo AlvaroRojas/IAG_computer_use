@@ -25,7 +25,13 @@ class CompareResult:
     mismatched_rows: int
     join_columns: list[str]
     report: str
+    # Value mismatches: rows whose key exists in BOTH envs but a non-key value
+    # differs beyond tolerance (datacompy's paired <col>_before/<col>_after shape).
     mismatches: pd.DataFrame
+    # Full rows whose key exists in only ONE env (a posting removed/added by the
+    # change) — datacompy's df1_unq_rows / df2_unq_rows, original column shape.
+    only_before: pd.DataFrame
+    only_after: pd.DataFrame
 
     def summary(self) -> dict:
         return {
@@ -37,6 +43,49 @@ class CompareResult:
             "mismatched_rows": self.mismatched_rows,
             "join_columns": self.join_columns,
         }
+
+    def combined_differences(self) -> pd.DataFrame:
+        """All three difference kinds in ONE frame for mismatches.csv, tagged by a
+        leading `diff_kind` column: 'value_mismatch' | 'only_before' | 'only_after'.
+
+        One uniform schema — join keys + datacompy's `<col>_before`/`<col>_after`
+        pairs — so no extra plain columns:
+          * value_mismatch: both sides filled (datacompy `all_mismatch` shape);
+          * only_before: the removed row's compared values go in `<col>_before`,
+            `<col>_after` left blank;
+          * only_after: the added row's values go in `<col>_after`, `<col>_before`
+            blank.
+        The column union is NaN-filled where a row has no value for a column. Empty
+        (header only, just `diff_kind`) when the envs match exactly. (datacompy
+        lowercases column names in its diff frames, so headers read lowercase.)"""
+        # join keys, lowercased to match datacompy's diff-frame column casing.
+        key_lower = {c.lower() for c in self.join_columns}
+
+        def _to_paired(frame: pd.DataFrame, suffix: str) -> pd.DataFrame:
+            # Lowercase to align with datacompy's all_mismatch frame, then suffix
+            # every NON-key (compared) column to `<col>_before` / `<col>_after` so
+            # a one-sided row lands in the same pair the value_mismatch rows use.
+            out = frame.copy()
+            out.columns = [str(c).lower() for c in out.columns]
+            rename = {c: f"{c}_{suffix}" for c in out.columns if c not in key_lower}
+            return out.rename(columns=rename)
+
+        frames: list[pd.DataFrame] = []
+        if self.mismatches is not None and not self.mismatches.empty:
+            m = self.mismatches.copy()
+            m.insert(0, "diff_kind", "value_mismatch")
+            frames.append(m)
+        if self.only_before is not None and not self.only_before.empty:
+            b = _to_paired(self.only_before, "before")
+            b.insert(0, "diff_kind", "only_before")
+            frames.append(b)
+        if self.only_after is not None and not self.only_after.empty:
+            a = _to_paired(self.only_after, "after")
+            a.insert(0, "diff_kind", "only_after")
+            frames.append(a)
+        if not frames:
+            return pd.DataFrame(columns=["diff_kind"])
+        return pd.concat(frames, ignore_index=True, sort=False)
 
 
 def compare(
@@ -78,6 +127,8 @@ def compare(
         join_columns=list(join_columns),
         report=cmp.report(),
         mismatches=cmp.all_mismatch(),
+        only_before=cmp.df1_unq_rows,
+        only_after=cmp.df2_unq_rows,
     )
 
 
@@ -90,7 +141,9 @@ def write_comparison(result: CompareResult, out_dir: Path) -> dict[str, Path]:
         "summary": out_dir / "summary.json",
     }
     paths["report"].write_text(result.report, encoding="utf-8")
-    result.mismatches.to_csv(paths["mismatches"], index=False)
+    # mismatches.csv carries ALL differences (value mismatches + rows only in one
+    # env), discriminated by the `diff_kind` column — not just value mismatches.
+    result.combined_differences().to_csv(paths["mismatches"], index=False)
     paths["summary"].write_text(
         json.dumps(result.summary(), indent=2), encoding="utf-8"
     )

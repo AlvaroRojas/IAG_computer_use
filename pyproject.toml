@@ -5,10 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "iag-accounting-sim"
 version = "0.1.0"
-description = "Murex accounting-simulation before/after comparator driven by OpenAI computer-use over Playwright"
+description = "Murex accounting-simulation before/after comparator driven by OpenAI or Anthropic/Bedrock computer-use"
 requires-python = ">=3.11"
 dependencies = [
     "openai>=1.60",
+    # Anthropic + AWS Bedrock (the [bedrock] extra pulls boto3/botocore). Use a
+    # recent release: AWS_BEARER_TOKEN_BEDROCK (Bedrock API key) support landed in
+    # the AnthropicBedrock client in late 2025.
+    "anthropic[bedrock]>=0.69",
     "playwright>=1.49",
     "langgraph>=0.2.50",
     "langgraph-checkpoint-sqlite>=3.0",  # durable cross-process resume (--resume)

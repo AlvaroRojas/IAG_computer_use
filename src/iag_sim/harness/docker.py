@@ -196,7 +196,7 @@ _FALLBACK_SEARCH_DIRS = ("/opt/murex", "/root", "/home")
 
 class DockerSession:
     def __init__(self, cid, computer, display, host_export, stop, runner=None,
-                 container_export_dir="/exports"):
+                 container_export_dir="/exports", poll=0.5, stable_polls=2):
         self.cid = cid
         self.computer = computer
         self.display = display
@@ -204,16 +204,46 @@ class DockerSession:
         self._stop = stop
         self._runner = runner
         self._container_export_dir = container_export_dir
+        self._poll = poll
+        self._stable_polls = stable_polls
 
-    async def collect_export(self) -> Path | None:
+    async def collect_export(self, timeout: float = 0.0) -> Path | None:
         """Return the exported CSV. Primary path: the bind-mounted export dir.
-        Fallback: the model sometimes saves to the chooser's default directory
-        instead of `/exports` — find the newest stray CSV in the container and
-        copy it into the export dir so the deterministic pipeline still sees it."""
-        csvs = sorted(self._host_export.glob("*.csv"), key=lambda p: p.stat().st_mtime)
-        if csvs:
-            return csvs[-1]
+        Waits up to `timeout` s for a CSV to APPEAR and its size to SETTLE — the
+        bind-mounted file can be globbed mid-write right after the model presses
+        Enter on the save chooser. Fallback: the model sometimes saves to the
+        chooser's default directory instead of `/exports` — find the newest stray
+        CSV in the container and copy it into the export dir so the deterministic
+        pipeline still sees it."""
+        path = await self._wait_for_stable_csv(timeout)
+        if path is not None:
+            return path
         return await self._recover_stray_csv()
+
+    async def _wait_for_stable_csv(self, timeout: float) -> Path | None:
+        """Newest `*.csv` in the bind mount once its size is stable for
+        `stable_polls` polls, capped by `timeout`. With timeout<=0, returns the
+        newest immediately (no wait). On timeout, returns the newest as a
+        best-effort (content validation downstream still gates it)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        last_size = -1
+        stable = 0
+        while True:
+            csvs = sorted(self._host_export.glob("*.csv"), key=lambda p: p.stat().st_mtime)
+            newest = csvs[-1] if csvs else None
+            if newest is not None:
+                size = newest.stat().st_size
+                if size > 0 and size == last_size:
+                    stable += 1
+                    if stable >= self._stable_polls:
+                        return newest
+                else:
+                    stable = 0
+                    last_size = size
+            if loop.time() >= deadline:
+                return newest
+            await asyncio.sleep(self._poll)
 
     async def _recover_stray_csv(self) -> Path | None:
         if self._runner is None:
@@ -368,6 +398,15 @@ class DockerHarness(Harness):
         # Desktop rejects the mount ("source path must be absolute").
         host_export = (self.run_dir / self.env.value / trade.trade_id).resolve()
         host_export.mkdir(parents=True, exist_ok=True)
+        # Fresh attempt: drop any *.csv a prior (failed/invalid) attempt for THIS
+        # trade left behind. host_export is per-trade and reused across retries, and
+        # collect_export globs it by mtime — without this, a stale bad file could be
+        # re-collected even if this attempt exported nothing.
+        for old in host_export.glob("*.csv"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
         rc, out, err = await self.runner(self._run_argv(trade, host_export))
         if rc != 0:
@@ -399,6 +438,7 @@ class DockerHarness(Harness):
         return DockerSession(
             cid, computer, (s.display_width, s.display_height), host_export, _stop,
             runner=self.runner, container_export_dir=s.murex_container_export_dir,
+            poll=s.export_poll_secs, stable_polls=s.export_stable_polls,
         )
 
     async def aclose(self) -> None:
