@@ -82,6 +82,11 @@ class BrowserHarness(Harness):
             # On-prem Murex serves a self-signed cert; without this, navigation
             # aborts with ERR_CERT_AUTHORITY_INVALID.
             "ignore_https_errors": s.murex_ignore_https_errors,
+            # Playwright contexts grant no permissions by default, so the async
+            # Clipboard API (navigator.clipboard.*) is rejected. Murex's web UI
+            # uses it for copy/paste in some grids; grant it so those paths work.
+            # Keyboard Ctrl+C/Ctrl+V works regardless — this is only for the JS API.
+            "permissions": ["clipboard-read", "clipboard-write"],
         }
         # Deterministic-login mode reuses the saved authenticated session;
         # LLM-login mode starts cold so the model sees the login page.
