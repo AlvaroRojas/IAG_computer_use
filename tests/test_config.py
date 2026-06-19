@@ -279,9 +279,10 @@ def test_export_gate_defaults(monkeypatch):
     assert s.export_wait_secs == 20
     assert s.export_poll_secs == 0.5
     assert s.export_stable_polls == 2
-    assert s.export_min_rows == 1
+    # Default 0: a zero-posting sim is a valid empty result (Murex still emits the header).
+    assert s.export_min_rows == 0
     assert s.export_require_trade_id is True
-    assert s.export_trade_id_column == "BO origin ref"
+    assert s.export_trade_id_columns == ["Trade nb", "Origin Trade nb"]
 
 
 def test_export_gate_overrides(monkeypatch):
@@ -290,12 +291,13 @@ def test_export_gate_overrides(monkeypatch):
         EXPORT_WAIT_SECS="5",
         EXPORT_MIN_ROWS="2",
         EXPORT_REQUIRE_TRADE_ID="false",
-        EXPORT_TRADE_ID_COLUMN="Trade ref",
+        EXPORT_TRADE_ID_COLUMN="Trade nb, Origin Trade nb",
     )
     assert s.export_wait_secs == 5
     assert s.export_min_rows == 2
     assert s.export_require_trade_id is False
-    assert s.export_trade_id_column == "Trade ref"
+    # comma-separated -> list, whitespace trimmed (NoDecode + _split_csv)
+    assert s.export_trade_id_columns == ["Trade nb", "Origin Trade nb"]
 
 
 def test_export_poll_secs_must_be_positive(monkeypatch):

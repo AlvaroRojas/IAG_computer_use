@@ -35,7 +35,8 @@ trades.csv
    │          └─ thick channel: `docker run` a Murex-client container (Xvfb + xdotool)
    │          computer-use loop: model emits actions → Computer executes
    │          → screenshot back → … → CSV exported
-   │          reality gate: real, non-empty CSV for THIS trade (else retry) ◀─ not the model's word
+   │          reality gate: real parseable CSV for THIS trade (else retry) ◀─ not the model's word
+   │          (a header-only CSV = a trusted zero-posting result, not a failure)
    ▼
  aggregate (pandas) ──▶ before_aggregated.csv / after_aggregated.csv
    ▼
@@ -177,8 +178,12 @@ Murex UI** and must be confirmed once (per the plan's pre-build steps):
 1. **CSV schema → diff key + export gate** (both channels) — open a real exported
    CSV and set `DIFF_JOIN_COLUMNS` (columns that uniquely identify a posting) and
    `DIFF_ABS_TOL` (defaults `trade_id,gl_account,currency`, `0.01` are a guess). On
-   the same file confirm `CSV_DELIMITER` and that `EXPORT_TRADE_ID_COLUMN`
-   ("BO origin ref") is the column the export reality gate matches every row against.
+   the same file confirm `CSV_DELIMITER` and `EXPORT_TRADE_ID_COLUMN` — a
+   comma-separated list of columns the reality gate matches each row against, passing
+   if any matches (default `Trade nb,Origin Trade nb`: a normal trade carries the id
+   in `Trade nb`, an origin/novated trade in `Origin Trade nb`).
+   A zero-posting simulation is treated as a valid empty result (header-only CSV);
+   set `EXPORT_MIN_ROWS=1` only if you want every trade to require postings.
 2. **Web channel: login selectors** — `src/iag_sim/murex/login.py` has
    **placeholder** selectors (`USERNAME_SELECTOR`, `PASSWORD_SELECTOR`,
    `SUBMIT_SELECTOR`, `LOGGED_IN_SELECTOR`). Walk the real login page once and

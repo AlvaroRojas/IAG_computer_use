@@ -169,8 +169,17 @@ counts go to the trace (`usage` event).
 - **An export is trusted only when it's a real artifact, never the model's word.**
   The model's "DONE" text is never a success signal — success requires a CSV on disk
   that passes the reality gate (`murex/export_validate.py`): exists, non-empty, parses
-  with `CSV_DELIMITER`, has ≥ `EXPORT_MIN_ROWS` rows, and every row's
-  `EXPORT_TRADE_ID_COLUMN` ("BO origin ref") equals the trade id. `collect_export`
+  with `CSV_DELIMITER`, has ≥ `EXPORT_MIN_ROWS` rows, and every row matches the trade id
+  in AT LEAST ONE of the `EXPORT_TRADE_ID_COLUMN` columns (a comma-separated list, default
+  `Trade nb,Origin Trade nb`: a normal trade carries the id in `Trade nb`, an origin/novated
+  trade in `Origin Trade nb` while `Trade nb` holds the resolved trade — matching any one
+  avoids rejecting legitimate origin trades while still catching a wrong export). **A zero-posting
+  simulation is a LEGITIMATE result, not a failure:** `EXPORT_MIN_ROWS` defaults to `0`,
+  so a header-only CSV (parses, has the trade-id column, 0 data rows) passes as a trusted
+  *empty* export (`ExportCheck.empty` → `WorkerResult.empty=True`). `postprocess.py`'s
+  coverage ledger then proves empty-before vs empty-after a MATCH and surfaces
+  empty-vs-non-empty as a present/missing difference (datacompy `rows_only_*`). Set
+  `EXPORT_MIN_ROWS=1` to require postings on every trade. `collect_export`
   first WAITS up to `EXPORT_WAIT_SECS` for the file/download to appear (web: the
   Playwright download event; thick: the bind-mounted file, size-stable for
   `EXPORT_STABLE_POLLS` polls), since the model's last action can fire it just as the
@@ -197,13 +206,17 @@ counts go to the trace (`usage` event).
 
 ## Before the first real run — required tuning
 
-The scaffold is complete and tested, but three things depend on the **actual Murex
+The scaffold is complete and tested, but four things depend on the **actual Murex
 UI** and are currently placeholders/guesses:
 1. **Diff key + export gate columns** — open a real exported CSV; set
    `DIFF_JOIN_COLUMNS` (columns that uniquely identify a posting) and `DIFF_ABS_TOL`
    (defaults `trade_id,gl_account,currency`, `0.01` are a guess). On the same CSV,
-   confirm `CSV_DELIMITER` and that `EXPORT_TRADE_ID_COLUMN` ("BO origin ref") is the
-   column carrying the trade reference — the reality gate matches every row against it.
+   confirm `CSV_DELIMITER` and the `EXPORT_TRADE_ID_COLUMN` columns (comma-separated,
+   default `Trade nb,Origin Trade nb`) carrying the trade reference — the reality gate
+   matches every row against them, passing if any one matches.
+   A zero-posting sim is treated as a valid empty export (`EXPORT_MIN_ROWS=0`); confirm
+   Murex still emits the header row for an empty result, and set `EXPORT_MIN_ROWS=1`
+   only if every trade must have postings.
 2. **Web login** — deterministic mode: set the placeholder selectors in
    `murex/login.py` against the real login page. LLM-login mode (`MUREX_LLM_LOGIN=true`):
    no selectors needed — the model logs in; tune the login wording in `simulate.py`
@@ -218,6 +231,14 @@ UI** and are currently placeholders/guesses:
    fixed wait). If your image's window class differs, set `MUREX_LOGIN_WINDOW_CLASS`.
    Thick login cannot be scripted → run with `MUREX_LLM_LOGIN=true` so the image
    boots to the login screen and the model logs in + picks the group.
+4. **Sim-result wait** — `SIM_RESULT_WAIT_SECS` (default `45`) is the max the model
+   waits after 'Proceed' for the postings table to populate before treating a
+   still-empty table as a zero-posting result and exporting the header-only CSV. It
+   is prompt guidance (`_GOAL` step 4 in `simulate.py`), not a Python timer — the
+   model is the only observer of the table. Tune to real accounting-sim latency: too
+   short exports a slow-but-real sim as a FALSE empty (the reality gate trusts it);
+   rows appearing sooner export immediately, so a generous value only costs turns on
+   genuinely empty sims. Sites that never expect empties can hard-fail via `EXPORT_MIN_ROWS=1`.
 
 Also confirm `CUA_MODEL` is a computer-use-capable model on your key.
 

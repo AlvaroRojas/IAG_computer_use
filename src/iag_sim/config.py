@@ -188,6 +188,21 @@ class Settings(BaseSettings):
     container_login_window_class: str = Field(
         default="murex-rmi-loader", alias="MUREX_LOGIN_WINDOW_CLASS"
     )
+    # Graceful Murex logout on container teardown. The backend caps concurrent
+    # sessions PER USER and reaps a session only when its client disconnects; a
+    # hard `docker stop` (SIGKILL after the grace window) can leave the session
+    # lingering server-side, so rapid retries/relaunches pile up and trip the cap.
+    # `docker stop -t <secs>` gives a SIGTERM-trapping client time to log out and
+    # disconnect cleanly before SIGKILL.
+    container_stop_timeout_secs: int = Field(
+        default=10, alias="MUREX_CONTAINER_STOP_TIMEOUT_SECS", ge=0
+    )
+    # Optional shell command run inside the container (`docker exec sh -c`) just
+    # before stop, to trigger a clean logout/disconnect when the client does NOT
+    # exit gracefully on SIGTERM (e.g. the Murex JVM is not PID 1: "pkill -TERM
+    # java", or an image-provided logout script). Empty = skip. Best-effort and
+    # time-bounded — never blocks teardown.
+    container_logout_cmd: str = Field(default="", alias="MUREX_CONTAINER_LOGOUT_CMD")
     # Per-container resource caps (cgroup limits via `docker run --cpus/--memory`).
     # Empty string disables that flag. Defaults bound each trade's container to
     # 1 CPU / 512MB so N parallel containers stay predictable on the host.
@@ -212,6 +227,23 @@ class Settings(BaseSettings):
         default=512, alias="PLAYWRIGHT_MAX_MEMORY_MB", ge=0
     )
     max_turns: int = Field(default=60, alias="MAX_TURNS", ge=1, le=500)
+    # Turn budget for the second, logout-only computer-use phase that runs AFTER
+    # the export has been validated. Kept small — clean log-off is a few clicks;
+    # it only releases the Murex session so the next trade doesn't hit the
+    # per-user session cap, and it is best-effort (failure never changes the
+    # WorkerResult). 0 disables the logout phase entirely.
+    logoff_max_turns: int = Field(default=8, alias="LOGOFF_MAX_TURNS", ge=0, le=60)
+    # Max seconds the model should wait for the accounting-simulation postings table
+    # to populate after clicking 'Proceed' before treating a STILL-EMPTY table as a
+    # zero-posting result and exporting the header-only CSV. Injected into the task
+    # prompt (the model is the only observer of the table — Python never sees it, so
+    # this is guidance, not a deterministic timer). The model decomposes it into a
+    # few ~15s 'wait' actions (cua/actions.py caps one wait at 15s). Set GENEROUSLY:
+    # too short and a slow-but-real sim gets exported header-only and is trusted as a
+    # FALSE empty; if rows appear sooner the model exports immediately, so a large
+    # value only costs turns on genuinely empty sims. Re-tune against real Murex
+    # accounting-sim latency before the first real run.
+    sim_result_wait_secs: int = Field(default=45, alias="SIM_RESULT_WAIT_SECS", ge=0)
     output_dir: Path = Field(default=Path("data/out"), alias="OUTPUT_DIR")
 
     # Diff
@@ -247,17 +279,29 @@ class Settings(BaseSettings):
     # Playwright save_as, so this does not apply there.
     export_stable_polls: int = Field(default=2, alias="EXPORT_STABLE_POLLS", ge=1)
     # Minimum DATA rows (excluding the header) a valid export must contain.
-    export_min_rows: int = Field(default=1, alias="EXPORT_MIN_ROWS", ge=0)
+    # Default 0: a zero-posting accounting simulation is a LEGITIMATE result —
+    # Murex still exports the header row, so a header-only CSV is a trusted empty
+    # outcome (empty-before vs empty-after => MATCH; empty vs non-empty => a real
+    # present/missing difference). Set to 1 only when every trade must have postings.
+    export_min_rows: int = Field(default=0, alias="EXPORT_MIN_ROWS", ge=0)
     # Enforce that every posting row references THIS trade (catches the model querying
-    # or exporting the wrong trade). Disable only if a real export omits the column.
+    # or exporting the wrong trade). Disable only if a real export omits the columns.
     export_require_trade_id: bool = Field(default=True, alias="EXPORT_REQUIRE_TRADE_ID")
-    # The export column carrying the trade reference. Confirmed Murex column name;
-    # re-verify against a real accounting-simulation export before the first run.
-    export_trade_id_column: str = Field(
-        default="BO origin ref", alias="EXPORT_TRADE_ID_COLUMN"
+    # Comma-separated list of export columns that may carry the queried trade ref. A
+    # row passes if its id matches ANY of these columns: the queried id lands in
+    # "Trade nb" for a normal trade, but in "Origin Trade nb" for an origin/novated
+    # trade whose postings are booked under a different (resolved) "Trade nb". Matching
+    # any one of them keeps the anti-hallucination guarantee (a wrong export matches
+    # none) without rejecting legitimate origin trades. NoDecode + _split_csv as for
+    # DIFF_JOIN_COLUMNS. Re-verify the column names against a real export.
+    export_trade_id_columns: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["Trade nb", "Origin Trade nb"],
+        alias="EXPORT_TRADE_ID_COLUMN",
     )
 
-    @field_validator("diff_join_columns", "docker_run_extra", mode="before")
+    @field_validator(
+        "diff_join_columns", "docker_run_extra", "export_trade_id_columns", mode="before"
+    )
     @classmethod
     def _split_csv(cls, v: object) -> object:
         if isinstance(v, str):

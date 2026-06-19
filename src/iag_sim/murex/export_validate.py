@@ -11,6 +11,7 @@ Pure (one file read, no other I/O) so it is unit-testable with `tmp_path`.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,11 +36,13 @@ def _norm_ref(value: object) -> str:
 @dataclass(frozen=True)
 class ExportCheck:
     """Result of validating one export. `reason` is the human-readable failure
-    (used verbatim as `WorkerResult.error`); `rows` is the data-row count on pass."""
+    (used verbatim as `WorkerResult.error`); `rows` is the data-row count on pass;
+    `empty` marks a trusted zero-posting export (passed with 0 data rows)."""
 
     ok: bool
     reason: str | None = None
     rows: int = 0
+    empty: bool = False
 
 
 def validate_export(
@@ -49,7 +52,7 @@ def validate_export(
     sep: str = ";",
     min_rows: int = 1,
     require_trade_id: bool = True,
-    trade_id_column: str = "BO origin ref",
+    trade_id_columns: Sequence[str] = ("BO origin ref",),
 ) -> ExportCheck:
     """Return ExportCheck(ok=True, rows=n) iff `path` is a real export for `trade_id`.
 
@@ -58,7 +61,19 @@ def validate_export(
       2. parses as CSV with the pipeline's delimiter (`sep` = the raw Murex
          delimiter `aggregate.concat_trade_csvs` later reads);
       3. has at least `min_rows` data rows;
-      4. (if `require_trade_id`) every row's `trade_id_column` equals `trade_id`.
+      4. (if `require_trade_id`) every row matches `trade_id` in AT LEAST ONE of
+         `trade_id_columns`. The queried id lands in "Trade nb" for a normal trade
+         but in "Origin Trade nb" for an origin/novated trade (whose "Trade nb" is the
+         resolved trade), so matching ANY listed column avoids wrongly rejecting
+         legitimate origin trades while still catching a truly wrong export (matches
+         none). At least one listed column must be present.
+
+    With the default `min_rows=0`, a header-only CSV (0 data rows) is a VALID
+    empty result — a zero-posting accounting simulation that still exported its
+    header — and returns `ExportCheck(ok=True, rows=0, empty=True)`. The per-row
+    trade-id match is vacuous on 0 rows, but the `trade_id_column` must still be
+    present (when `require_trade_id`) as proof the right export schema was emitted.
+    A truly broken export (missing file / 0 bytes / unparseable) still fails.
     """
     if not path.exists() or path.stat().st_size == 0:
         return ExportCheck(ok=False, reason="export file empty/missing")
@@ -75,17 +90,27 @@ def validate_export(
         return ExportCheck(ok=False, reason=f"export has {rows} rows, need >= {min_rows}")
 
     if require_trade_id:
-        if trade_id_column not in df.columns:
-            return ExportCheck(ok=False, reason=f"export missing column {trade_id_column!r}")
-        want = _norm_ref(trade_id)
-        normalized = df[trade_id_column].map(_norm_ref)
-        bad = normalized != want
-        if bad.any():
-            # Report the RAW offending cell (not the normalized form) for debugging.
-            other = df[trade_id_column][bad].iloc[0]
+        present = [c for c in trade_id_columns if c in df.columns]
+        if not present:
             return ExportCheck(
                 ok=False,
-                reason=f"export rows reference {other!r}, expected {want!r}",
+                reason=f"export missing trade-id column(s); looked for "
+                f"{list(trade_id_columns)}, have {list(df.columns)}",
+            )
+        want = _norm_ref(trade_id)
+        # A row is good if the wanted id appears in ANY present column.
+        matches_any = None
+        for c in present:
+            col_match = df[c].map(_norm_ref) == want
+            matches_any = col_match if matches_any is None else (matches_any | col_match)
+        bad = ~matches_any
+        if bad.any():
+            # Report the RAW offending cells (not the normalized form) for debugging.
+            idx = bad.idxmax()  # first offending row
+            shown = ", ".join(f"{c}={df.loc[idx, c]!r}" for c in present)
+            return ExportCheck(
+                ok=False,
+                reason=f"export row references {shown}; expected {want!r} in one of {present}",
             )
 
-    return ExportCheck(ok=True, rows=rows)
+    return ExportCheck(ok=True, rows=rows, empty=(rows == 0))

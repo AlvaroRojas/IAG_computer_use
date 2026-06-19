@@ -20,7 +20,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "iag_sim",
-      "args": ["run", "--trades", "data/trades.csv", "--engine", "langgraph"],
+      "args": ["run", "--trades", "data/trades.csv", "--engine langgraph", "langgraph"],
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",

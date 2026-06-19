@@ -257,7 +257,8 @@ class RunStopRunner:
         return (0, b"", b"")
 
     def stopped(self) -> list[str]:
-        return [a[2] for a in self.calls if a[:2] == ["docker", "stop"]]
+        # `docker stop [-t N] <cid>` — the container id is the last arg.
+        return [a[-1] for a in self.calls if a[:2] == ["docker", "stop"]]
 
 
 def _thick_harness(run_dir, runner):
@@ -295,6 +296,38 @@ async def test_aclose_stops_container_even_without_session_close(tmp_path):
     assert r.stopped() == ["cidAA"]
     assert h._containers == set()
     assert "cidAA" not in dmod._LIVE_CONTAINERS
+    # No logout command configured -> no `docker exec` is issued on teardown.
+    assert not any(a[:2] == ["docker", "exec"] for a in r.calls)
+    # Default stop grace (-t 10) is applied.
+    assert ["docker", "stop", "-t", "10", "cidAA"] in r.calls
+
+
+async def test_graceful_stop_runs_logout_then_stop(tmp_path):
+    # With a logout command configured, teardown runs it inside the container
+    # (best-effort) BEFORE `docker stop -t <grace>`, so the Murex backend reaps the
+    # session on a clean disconnect instead of accumulating it until timeout.
+    r = RunStopRunner("cidBB")
+    s = Settings(
+        _env_file=None,
+        OPENAI_API_KEY="sk-test",
+        MUREX_BEFORE_URL="https://before",
+        MUREX_AFTER_URL="https://after",
+        MUREX_USER="u",
+        MUREX_PASS="p",
+        MUREX_CHANNEL="thick",
+        MUREX_DOCKER_IMAGE="murex-thick:latest",
+        MUREX_CONTAINER_READY_SECS="0",
+        MUREX_LLM_LOGIN="true",
+        MUREX_CONTAINER_LOGOUT_CMD="pkill -TERM java",
+        MUREX_CONTAINER_STOP_TIMEOUT_SECS="7",
+    )
+    h = DockerHarness(EnvName.BEFORE, s, tmp_path, runner=r)
+    sess = await h.new_session(TradeTask(trade_id="594"))
+    await sess.close()
+    logout = ["docker", "exec", "cidBB", "sh", "-c", "pkill -TERM java"]
+    stop = ["docker", "stop", "-t", "7", "cidBB"]
+    assert logout in r.calls and stop in r.calls
+    assert r.calls.index(logout) < r.calls.index(stop)
 
 
 async def test_session_close_untracks_container(tmp_path):

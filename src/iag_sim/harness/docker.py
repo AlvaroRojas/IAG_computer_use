@@ -286,6 +286,25 @@ class DockerHarness(Harness):
         # returned), which DockerSession.close() would otherwise never reach.
         self._containers: set[str] = set()
 
+    async def _graceful_stop(self, cid: str) -> None:
+        """Log the Murex client out, then stop the container. The backend reaps a
+        per-user session only on clean client disconnect, so a graceful exit keeps
+        rapid retries/relaunches from piling up sessions and tripping the cap.
+        Optional `container_logout_cmd` runs inside the container first (best-effort,
+        time-bounded); `docker stop -t` then gives a SIGTERM-trapping client time to
+        disconnect before SIGKILL."""
+        s = self.settings
+        grace = s.container_stop_timeout_secs
+        if s.container_logout_cmd:
+            try:
+                await asyncio.wait_for(
+                    self.runner(["docker", "exec", cid, "sh", "-c", s.container_logout_cmd]),
+                    timeout=max(1, grace),
+                )
+            except Exception:
+                pass  # best-effort; never block teardown on the logout step
+        await self.runner(["docker", "stop", "-t", str(grace), cid])
+
     async def setup(self) -> None:
         if not self.settings.murex_docker_image:
             raise ValueError("MUREX_DOCKER_IMAGE must be set for the thick (docker) channel")
@@ -429,7 +448,7 @@ class DockerHarness(Harness):
         )
 
         async def _stop(container_id: str) -> None:
-            await self.runner(["docker", "stop", container_id])
+            await self._graceful_stop(container_id)
             # Untrack only after a successful stop, so a failed/cancelled stop
             # stays on the list for aclose()/atexit to retry.
             self._containers.discard(container_id)
@@ -449,7 +468,7 @@ class DockerHarness(Harness):
         cancelled, and errors (already-gone container) are ignored."""
         for cid in list(self._containers):
             try:
-                await asyncio.shield(self.runner(["docker", "stop", cid]))
+                await asyncio.shield(self._graceful_stop(cid))
             except Exception:
                 pass
             finally:

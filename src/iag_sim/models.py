@@ -28,5 +28,9 @@ class WorkerResult(BaseModel):
     env: EnvName
     csv_path: str | None = None
     ok: bool = False
+    # A trusted zero-posting result: the simulation ran and exported a header-only
+    # CSV (0 data rows). ok=True, but the coverage ledger tracks it apart from
+    # postings-bearing results so empty-both can be proven a MATCH.
+    empty: bool = False
     error: str | None = None
     turns: int = 0

@@ -14,13 +14,18 @@ class UnknownActionError(ValueError):
 
 
 _DEFAULT_WAIT_MS = 1000
+_MAX_WAIT_MS = 15_000
 
 
 def wait_duration_ms(action: Action) -> int:
     """Resolve how long a `wait` action pauses (ms). The model may send
-    `duration_ms` or `ms`; absent both it's the default. Single source of truth
-    so the executed wait and the traced wait can never disagree."""
-    return int(action.get("duration_ms", action.get("ms", _DEFAULT_WAIT_MS)))
+    `duration_ms` or `ms`; absent both it's the default. Clamped to
+    ``_MAX_WAIT_MS`` so a single wait can't burn one of the (few) MAX_TURNS
+    on an unbounded sleep — the model dismisses a session-limit dialog and
+    waits at most this long for sessions to reap, then re-checks. Single source
+    of truth so the executed wait and the traced wait can never disagree."""
+    raw = int(action.get("duration_ms", action.get("ms", _DEFAULT_WAIT_MS)))
+    return max(0, min(raw, _MAX_WAIT_MS))
 
 
 def _coord_path(raw) -> list[list[int]]:
