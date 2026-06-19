@@ -24,7 +24,9 @@ export JAVAHOME="${JAVAHOME:-${JAVA_HOME:-/opt/java/openjdk}}"
 TARGET="${MUREX_ENV_TARGET:-}"
 T_HOST=""
 T_PORT=""
+T_SCHEME=""
 if [ -n "$TARGET" ]; then
+  case "$TARGET" in *://*) T_SCHEME="${TARGET%%://*}" ;; esac   # capture scheme
   TARGET="${TARGET#*://}"     # strip scheme://
   TARGET="${TARGET%%/*}"      # strip /path
   T_HOST="${TARGET%%:*}"
@@ -33,6 +35,9 @@ fi
 
 export MXJ_FILESERVER_HOST="${MXJ_FILESERVER_HOST:-${T_HOST:-10.10.0.93}}"
 export MXJ_FILESERVER_PORT="${MXJ_FILESERVER_PORT:-${T_PORT:-20001}}"
+# The file server now uses TLS; honour the scheme from MUREX_ENV_TARGET (e.g. https://...),
+# overridable via MXJ_FILESERVER_SCHEME, defaulting to https since the servers migrated.
+export MXJ_FILESERVER_SCHEME="${MXJ_FILESERVER_SCHEME:-${T_SCHEME:-https}}"
 
 # Live env answers on site1 with NO destination-site (proven by the vendor's
 # working launcher); site=default + destination=site1 makes the client report
@@ -68,6 +73,33 @@ case "$JV" in
   *)    JMAJOR="${JV%%.*}" ;;
 esac
 
+# --- TLS trust: build a throwaway truststore from certs/ WITHOUT touching the JDK ---
+# Mirrors murex/client.cmd|client.sh: import every cert in $APP_DIR/certs into a temp JKS
+# store and point Java at it via -Djavax.net.ssl.trustStore. The Temurin cacerts is never
+# modified. Folder-driven, so drop the cert(s) for $MXJ_FILESERVER_HOST into murex/certs/
+# (baked into the image) and rebuild. No certs -> no SSL args (default trust), so a plain
+# http target still works.
+CERTS_DIR="$APP_DIR/certs"
+TRUSTSTORE="$(mktemp "${TMPDIR:-/tmp}/murex-truststore.XXXXXX")"
+rm -f "$TRUSTSTORE"   # keytool must create the keystore itself; an empty file isn't valid
+SSL_ARGS=()
+if [ -d "$CERTS_DIR" ]; then
+  shopt -s nullglob
+  for CERT in "$CERTS_DIR"/*.cer "$CERTS_DIR"/*.crt "$CERTS_DIR"/*.pem "$CERTS_DIR"/*.der; do
+    "$JAVAHOME/bin/keytool" -importcert -noprompt -storetype JKS \
+      -alias "$(basename "$CERT")" -file "$CERT" \
+      -keystore "$TRUSTSTORE" -storepass changeit >/dev/null
+  done
+  shopt -u nullglob
+fi
+if [ -f "$TRUSTSTORE" ]; then
+  SSL_ARGS=(
+    -Djavax.net.ssl.trustStore="$TRUSTSTORE"
+    -Djavax.net.ssl.trustStorePassword=changeit
+    -Djavax.net.ssl.trustStoreType=JKS
+  )
+fi
+
 # Common args.
 JAVA_ARGS=(
   -Xmx256M
@@ -77,7 +109,8 @@ JAVA_ARGS=(
   -Djxbrowser.logging.file=logs/jxbrowser.log
   -Djxbrowser.crash.dump.dir=logs/JxBrowser
   -Djava.security.policy="$MXJ_POLICY"
-  -Djava.rmi.server.codebase="http://$MXJ_FILESERVER_HOST:$MXJ_FILESERVER_PORT/$MXJ_JAR_FILELIST"
+  -Djava.rmi.server.codebase="$MXJ_FILESERVER_SCHEME://$MXJ_FILESERVER_HOST:$MXJ_FILESERVER_PORT/$MXJ_JAR_FILELIST"
+  "${SSL_ARGS[@]}"
 )
 
 if [ "$JMAJOR" -eq 8 ]; then
@@ -120,7 +153,7 @@ else
   )
 fi
 
-echo "[launch] java=$JV (major=$JMAJOR) fileserver=$MXJ_FILESERVER_HOST:$MXJ_FILESERVER_PORT"
+echo "[launch] java=$JV (major=$JMAJOR) fileserver=$MXJ_FILESERVER_SCHEME://$MXJ_FILESERVER_HOST:$MXJ_FILESERVER_PORT (tls-trust args: ${#SSL_ARGS[@]})"
 
 exec "$JAVAHOME/bin/java" \
   "${JAVA_ARGS[@]}" \

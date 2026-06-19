@@ -31,3 +31,6 @@ murex/client.sh
 murex/java.policy
 murex/_diag_out.txt
 murex/_diag_err.txt
+# TLS: bake the .cer/.crt/.pem trust material (murex/certs/) into the image, but NOT the
+# truststore the launcher generates from it at runtime.
+murex/certs/truststore.jks

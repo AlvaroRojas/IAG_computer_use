@@ -42,6 +42,12 @@ COPY murex/bin/        /opt/murex/bin/
 COPY murex/mxjboot.jar /opt/murex/mxjboot.jar
 COPY murex/client.xml  /opt/murex/client.xml
 
+# TLS trust material for the file server (now HTTPS). launch-client.sh builds a throwaway
+# truststore from these at startup; the Temurin cacerts is never modified. Folder-driven:
+# drop the cert(s) for your target host into murex/certs/ and rebuild. The generated
+# murex/certs/truststore.jks is .dockerignored (only the .cer/.crt/.pem files are baked in).
+COPY murex/certs/      /opt/murex/certs/
+
 # Permissive policy (the launcher passes -Djava.security.policy) + our scripts.
 COPY docker/java.policy      /opt/murex/java.policy
 COPY docker/launch-client.sh /usr/local/bin/launch-client.sh

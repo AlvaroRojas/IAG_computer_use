@@ -24,6 +24,9 @@ class CompareResult:
     rows_only_after: int
     mismatched_rows: int
     join_columns: list[str]
+    # Full ordered column list of the aggregated frames (original case) — lets
+    # combined_differences() emit a stable schema even when there are no diffs.
+    all_columns: list[str]
     report: str
     # Value mismatches: rows whose key exists in BOTH envs but a non-key value
     # differs beyond tolerance (datacompy's paired <col>_before/<col>_after shape).
@@ -55,8 +58,10 @@ class CompareResult:
             `<col>_after` left blank;
           * only_after: the added row's values go in `<col>_after`, `<col>_before`
             blank.
-        The column union is NaN-filled where a row has no value for a column. Empty
-        (header only, just `diff_kind`) when the envs match exactly. (datacompy
+        The column union is NaN-filled where a row has no value for a column. The
+        schema is STABLE: the same columns appear whether or not there are diffs —
+        on an exact match the frame is empty (header only) but still carries the
+        full schema, so downstream consumers always see the same header. (datacompy
         lowercases column names in its diff frames, so headers read lowercase.)"""
         # join keys, lowercased to match datacompy's diff-frame column casing.
         key_lower = {c.lower() for c in self.join_columns}
@@ -73,6 +78,7 @@ class CompareResult:
         frames: list[pd.DataFrame] = []
         if self.mismatches is not None and not self.mismatches.empty:
             m = self.mismatches.copy()
+            m.columns = [str(c).lower() for c in m.columns]
             m.insert(0, "diff_kind", "value_mismatch")
             frames.append(m)
         if self.only_before is not None and not self.only_before.empty:
@@ -83,9 +89,24 @@ class CompareResult:
             a = _to_paired(self.only_after, "after")
             a.insert(0, "diff_kind", "only_after")
             frames.append(a)
-        if not frames:
-            return pd.DataFrame(columns=["diff_kind"])
-        return pd.concat(frames, ignore_index=True, sort=False)
+        # Stable schema: diff_kind + join keys + <col>_before/<col>_after for every
+        # non-key column, so mismatches.csv has the SAME header whether or not there
+        # are differences. Built from join_columns + the aggregated frames' columns.
+        key_order = [c.lower() for c in self.join_columns]
+        nonkey = [
+            c
+            for c in dict.fromkeys(str(x).lower() for x in self.all_columns)
+            if c not in key_lower
+        ]
+        schema = ["diff_kind", *key_order]
+        for c in nonkey:
+            schema += [f"{c}_before", f"{c}_after"]
+        combined = (
+            pd.concat(frames, ignore_index=True, sort=False)
+            if frames
+            else pd.DataFrame(columns=schema)
+        )
+        return combined.reindex(columns=schema)
 
 
 def compare(
@@ -125,6 +146,7 @@ def compare(
         rows_only_after=int(len(cmp.df2_unq_rows)),
         mismatched_rows=int(len(cmp.all_mismatch())),
         join_columns=list(join_columns),
+        all_columns=list(before.columns),
         report=cmp.report(),
         mismatches=cmp.all_mismatch(),
         only_before=cmp.df1_unq_rows,

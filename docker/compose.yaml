@@ -1,0 +1,36 @@
+# Build / run the Murex Mx.3 thick client (Swing GUI) container.
+#
+# Build context is the repo ROOT (the image COPYs murex/{jar,bin,mxjboot.jar,client.xml,certs}),
+# so run compose from the repo root pointing at this file:
+#
+#   podman compose -f docker/compose.yaml build                                  # build the image
+#   ENABLE_VNC=true podman compose --env-file ../.env -f docker/compose.yaml up   # run + watch
+#
+# Compose's project dir is docker/, so the repo-root .env is NOT auto-read for the
+# ${MUREX_BEFORE_URL} substitution below -- pass --env-file ../.env (as above) or set
+# MUREX_ENV_TARGET inline for manual runs. (The iag-sim harness doesn't use this file.)
+#
+# The before/after harness (src/iag_sim/harness/docker.py) starts its OWN per-trade
+# containers through the API; this service is for building the image and manual debugging.
+services:
+  murex-thick:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.thick
+    image: murex-thick:latest
+    environment:
+      # Manual `podman compose up` only -- target sourced from .env, no hardcoded default.
+      # (The iag-sim harness sets MUREX_ENV_TARGET itself per before/after worker; this
+      # service env is irrelevant to that path.) Scheme honoured; certs in murex/certs/
+      # are baked in and trusted by launch-client.sh.
+      MUREX_ENV_TARGET: ${MUREX_BEFORE_URL}
+      DISPLAY: ":99"
+      SCREEN_GEOMETRY: "1280x800"
+      MUREX_LLM_LOGIN: "true"
+      # Set ENABLE_VNC=true to watch the GUI at http://localhost:6080
+      ENABLE_VNC: ${ENABLE_VNC:-false}
+    ports:
+      - "6080:6080"   # noVNC web (only serves when ENABLE_VNC=true)
+      - "5900:5900"   # x11vnc
+    volumes:
+      - ./exports:/exports

@@ -166,4 +166,10 @@ def test_combined_differences_empty_on_match():
     before = _frame(10.0, 20.0)
     result = compare(before, before.copy(), JOIN, abs_tol=0.01)
     combined = result.combined_differences()
-    assert combined.empty and list(combined.columns) == ["diff_kind"]
+    # Empty (no diff rows) but carries the full STABLE schema, identical to the
+    # populated case: diff_kind + join keys + <col>_before/<col>_after pairs.
+    assert combined.empty
+    assert list(combined.columns) == [
+        "diff_kind", "trade_id", "gl_account", "currency",
+        "amount_before", "amount_after",
+    ]
