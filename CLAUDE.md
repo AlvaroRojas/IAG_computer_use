@@ -32,6 +32,9 @@ Copy-Item .env.example .env                                 # then fill real val
 .\.venv\Scripts\python.exe -m iag_sim run --trades data/trades.csv --engine langgraph
 .\.venv\Scripts\python.exe -m iag_sim run --headed --max-concurrency 2   # web debug
 
+# Serve the run API (langgraph engine over REST) — needs $env:IAG_SIM_API_KEY
+.\.venv\Scripts\python.exe -m iag_sim.server                # or: iag-sim-api  (:8000)
+
 # Tests (deterministic — no browser, Docker, or network needed)
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m pytest tests/test_diff.py -q          # one file
@@ -84,6 +87,28 @@ a thick "after".
   checkpoint, only unfinished ones re-run (resources + Murex login always
   re-established). `build_graph` falls back to in-memory `MemorySaver` when no
   checkpointer is passed (tests). Needs `langgraph-checkpoint-sqlite`.
+
+### HTTP API surface (`api/`, `server.py`)
+
+A thin FastAPI layer (`iag-sim-api` console script) drives the **langgraph** engine
+over REST without changing it — it just builds a **per-request `Settings`** and
+calls `run_graph_async`. This works because `get_settings()`' `lru_cache` singleton
+is used ONLY by the CLI; every engine/orchestration layer takes `settings` as a
+parameter, so a fresh `Settings(**alias_kwargs)` threads through with zero global
+bleed. The request body's `MUREX_*` + `MAX_CONCURRENCY` keys are the `Settings`
+field aliases verbatim (`api/service.py::build_settings_from_request`), so they
+override those fields for that run while provider creds / `OUTPUT_DIR` / diff tuning
+fall back to the server's env/`.env`. `POST /runs` (empty `run_id` mints a new
+`run-<UTC>` dir; non-empty resumes that folder's checkpoint) launches the run as a
+detached `asyncio.create_task` and returns `202` + the run id; `GET /runs/{id}`
+polls. `api/run_manager.py` enforces **one run at a time** (an `asyncio.Lock` guards
+the busy-check + slot claim; a second `POST` gets `409`) and keeps an in-memory
+status registry — the durable on-disk checkpoint is the recovery story across a
+process restart (re-`POST` the run id). Auth is a shared `X-API-Key` vs
+`IAG_SIM_API_KEY` (`api/security.py`); `thick` channel forces `MUREX_LLM_LOGIN=true`.
+The status `result_code` (`MATCH`/`DIFFERENCES`/`NO_COMPARISON`) mirrors the CLI exit
+codes `0`/`2`/`1`. Never call `asyncio.run` inside the API loop — `run_graph_async`
+is awaited directly and opens its own resources + sqlite saver.
 
 ### Computer-use loop (`cua/`)
 
