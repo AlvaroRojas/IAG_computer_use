@@ -159,6 +159,58 @@ comparison produced (a side yielded no data).
 Artifacts land in `data/out/run-<timestamp>/`: per-trade CSVs, the two
 aggregates, and `comparison/`.
 
+## HTTP API
+
+The same LangGraph run can be driven over REST (for a deployed service) instead of
+the CLI. Serve it with the `iag-sim-api` console script:
+
+```powershell
+$env:IAG_SIM_API_KEY = "your-shared-secret"      # required
+.\.venv\Scripts\python.exe -m iag_sim.server     # or: iag-sim-api  (listens on :8000)
+```
+
+The server reads provider credentials (`CUA_PROVIDER` + its key) and `OUTPUT_DIR`
+from its own `.env`/env. Every request carries the **Murex connection config + the
+trade list**, which override those Murex fields for that one run.
+
+Endpoints (all under `X-API-Key: <IAG_SIM_API_KEY>`, except `/health`):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/runs` | Start a new run (empty `run_id`) or resume one (`202` + run id) |
+| `GET` | `/runs/{run_id}` | Poll status + result summary |
+| `GET` | `/runs` | List known runs |
+| `GET` | `/health` | Liveness (no auth) |
+
+A run executes **in the background** (it drives `N×2` computer-use sessions, minutes
+to hours) and **one at a time** — a `POST` while a run is in flight returns `409`.
+The engine is always `langgraph`, so a run id maps to its on-disk checkpoint and is
+resumable: re-`POST` the same `run_id` to continue a crashed run.
+
+```jsonc
+// POST /runs  — empty run_id starts a new run; a folder name resumes it
+{
+  "run_id": "",                                  // "" = new; "run-20260617-170647" = resume
+  "MUREX_BEFORE_URL": "https://murex-before.internal",
+  "MUREX_AFTER_URL":  "https://murex-after.internal",
+  "MUREX_USER": "svc_user",
+  "MUREX_PASS": "••••••",
+  "MUREX_LOGIN_GROUP": "ACCT_DESK_01",
+  "MUREX_BEFORE_GROUP": null,                     // optional; falls back to MUREX_LOGIN_GROUP
+  "MUREX_AFTER_GROUP":  null,
+  "MUREX_CHANNEL": "web",                         // "web" | "thick"
+  "MUREX_BEFORE_CHANNEL": null,                   // optional; falls back to MUREX_CHANNEL
+  "MUREX_AFTER_CHANNEL":  null,
+  "MAX_CONCURRENCY": 4,
+  "trades": [ { "trade_id": "1472107" }, { "trade_id": "1472777" } ]
+}
+```
+
+The status response carries the same summary the CLI prints (with `run_id` +
+`total_execution_seconds`) plus a `result_code` of `MATCH` / `DIFFERENCES` /
+`NO_COMPARISON` — the analogues of CLI exit codes `0` / `2` / `1`. The `thick`
+channel forces `MUREX_LLM_LOGIN=true` automatically (its login cannot be scripted).
+
 ## Tests
 
 ```powershell
