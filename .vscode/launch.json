@@ -50,6 +50,17 @@
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "envFile": "${workspaceFolder}/.env",
       "justMyCode": false
+    },
+    {
+      "name": "Serve: run API (langgraph over REST)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "iag_sim.server",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": false
     }
   ],
   "inputs": [
