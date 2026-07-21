@@ -58,6 +58,11 @@ class RunManager:
         self._registry: dict[str, RunRecord] = {}
 
     @property
+    def output_dir(self) -> Path:
+        """Root holding every run dir — routes resolve on-disk artifacts under it."""
+        return self._output_dir
+
+    @property
     def is_busy(self) -> bool:
         return self._current is not None and self._current.status == RunStatus.RUNNING
 

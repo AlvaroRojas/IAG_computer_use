@@ -73,15 +73,31 @@ class StartRunResponse(BaseModel):
     message: str
 
 
+class ArtifactLink(BaseModel):
+    """One downloadable run artifact that EXISTS on disk. `url` points at
+    GET /runs/{run_id}/artifacts/{name} (same X-API-Key auth as every run route)."""
+
+    name: str
+    url: str
+    size_bytes: int
+    media_type: str
+
+
 class RunStatusResponse(BaseModel):
     """GET /runs/{run_id} body. `summary` is the raw dict from `run_graph_async`
     (run_dir, before_csv, after_csv, trades_ok_*, failures, comparison, diff) with
-    run_id + total_execution_seconds stamped on, matching the CLI's final JSON."""
+    run_id + total_execution_seconds stamped on, matching the CLI's final JSON.
+
+    `comparison_summary` is the CONTENT of `comparison/summary.json` read from disk
+    (null when the run produced no comparison), and `artifacts` lists only the files
+    that actually exist — an empty list while a run is still executing."""
 
     run_id: str
     status: RunStatus
     result_code: ResultCode | None = None
     summary: dict[str, Any] | None = None
+    comparison_summary: dict[str, Any] | None = None
+    artifacts: list[ArtifactLink] = Field(default_factory=list)
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None

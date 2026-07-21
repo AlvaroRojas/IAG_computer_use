@@ -110,6 +110,16 @@ The status `result_code` (`MATCH`/`DIFFERENCES`/`NO_COMPARISON`) mirrors the CLI
 codes `0`/`2`/`1`. Never call `asyncio.run` inside the API loop — `run_graph_async`
 is awaited directly and opens its own resources + sqlite saver.
 
+The status body also serves the on-disk audit trail: `comparison_summary` is the
+CONTENT of `<run_dir>/comparison/summary.json` (null when the run produced no
+comparison) and `artifacts[]` links the files that actually exist, each downloadable
+from `GET /runs/{id}/artifacts/{name}` (same `X-API-Key`). `api/artifacts.py` is the
+ONLY place a caller-supplied id/name becomes a path: the name is a **whitelist key**
+(`summary.json`, `mismatches.csv`, `report.txt`), never a path segment, and
+`run_dir_for` rejects separators + requires the resolved dir to sit directly under
+`OUTPUT_DIR`. Keep both containment rules if you add artifacts; reads return `None`
+on missing/corrupt files so a half-written run dir can't 500 the status endpoint.
+
 ### Computer-use loop (`cua/`)
 
 **3. Provider seam (`cua/backend.py`).** An `AgentBackend` owns the model client +
