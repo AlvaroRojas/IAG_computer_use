@@ -15,11 +15,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class RunStatus(str, Enum):
     """Lifecycle of a single run. No QUEUED — runs start immediately or are
-    rejected (one-at-a-time)."""
+    rejected (one-at-a-time).
+
+    The last two are only ever produced by hydrating a run dir from disk after the
+    process that owned it went away (see `run_store`)."""
 
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"  # died mid-run; checkpoint on disk -> re-POST to resume
+    UNKNOWN = "UNKNOWN"  # run dir exists but carries no usable status trace
 
 
 class ResultCode(str, Enum):

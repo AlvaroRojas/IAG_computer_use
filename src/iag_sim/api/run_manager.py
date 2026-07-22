@@ -8,16 +8,17 @@ HTTP response, and keeps an in-memory registry of run status/result for polling.
 `asyncio.run` (which would explode inside FastAPI's running loop). It opens its own
 resources + SQLite checkpointer internally, so the manager calls nothing else.
 
-The registry is in-memory: if the process restarts mid-run the durable on-disk
-checkpoint (`<run_dir>/checkpoints.sqlite`) survives, but status does not — the
-caller re-POSTs the same run id to resume from the checkpoint.
+The registry is in-memory, but it is NOT the only copy: every status transition is
+mirrored to `<run_dir>/status.json` (`run_store`), and reads fall back to disk. So a
+restarted process still lists/serves past runs; a run that died mid-flight comes
+back as INTERRUPTED, and the caller re-POSTs its id to resume from the durable
+checkpoint (`<run_dir>/checkpoints.sqlite`).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -28,26 +29,17 @@ from ..config import Settings
 from ..models import TradeTask
 from ..orchestration.graph import CHECKPOINT_DB, run_graph_async
 from ..runlog import setup_run_logging
-from .schemas import ResultCode, RunStatus
+from .run_store import RunRecord, list_run_ids, read_status, write_status
+from .schemas import RunStatus
 from .service import derive_result_code, mint_run_id
 
 log = logging.getLogger("iag_sim.api")
 
+__all__ = ["RunManager", "RunRecord"]  # RunRecord re-exported from run_store
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-@dataclass
-class RunRecord:
-    run_id: str
-    status: RunStatus
-    result_code: ResultCode | None = None
-    summary: dict | None = None
-    error: str | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    task: asyncio.Task | None = field(default=None, repr=False)
 
 
 class RunManager:
@@ -99,10 +91,14 @@ class RunManager:
 
             setup_run_logging(run_dir)  # CLI does this; the engine does not
             record = RunRecord(
-                run_id=run_id, status=RunStatus.RUNNING, started_at=_utcnow()
+                run_id=run_id,
+                status=RunStatus.RUNNING,
+                started_at=_utcnow(),
+                run_dir=run_dir,
             )
             self._registry[run_id] = record
             self._current = record
+            write_status(run_dir, record)  # visible on disk from the first moment
 
         log.info(
             f"{'RESUMING' if resume else 'STARTING'} run_id={run_id} "
@@ -139,15 +135,33 @@ class RunManager:
                 f"run_id={record.run_id} {record.result_code.value} in {elapsed:.2f}s"
             )
         except Exception as exc:  # automation/engine failure — surfaced as FAILED
-            record.error = str(exc)
+            # Qualify with the type: several exception classes stringify to "" or
+            # to an opaque repr, which would leave the caller with a blank error.
+            record.error = f"{type(exc).__name__}: {exc}"
             record.status = RunStatus.FAILED
             log.exception(f"run_id={record.run_id} FAILED: {exc}")
         finally:
             record.finished_at = _utcnow()
+            write_status(run_dir, record)  # durable outcome, survives a restart
             self._current = None  # release the slot, even on failure
 
     def get(self, run_id: str) -> RunRecord | None:
-        return self._registry.get(run_id)
+        """The live record if this process owns/owned the run, else the record
+        rebuilt from the run dir on disk (None when there is no such run dir)."""
+        record = self._registry.get(run_id)
+        if record is not None:
+            return record
+        return read_status(self._output_dir, run_id)
 
     def list_all(self) -> list[RunRecord]:
-        return list(self._registry.values())
+        """In-memory records merged with every run dir on disk, newest first.
+        Memory wins for ids present in both — it is the only place a RUNNING run is
+        accurate."""
+        records = dict(self._registry)
+        for run_id in list_run_ids(self._output_dir):
+            if run_id in records:
+                continue
+            record = read_status(self._output_dir, run_id)
+            if record is not None:
+                records[run_id] = record
+        return sorted(records.values(), key=lambda r: r.run_id, reverse=True)

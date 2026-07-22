@@ -103,8 +103,16 @@ fall back to the server's env/`.env`. `POST /runs` (empty `run_id` mints a new
 detached `asyncio.create_task` and returns `202` + the run id; `GET /runs/{id}`
 polls. `api/run_manager.py` enforces **one run at a time** (an `asyncio.Lock` guards
 the busy-check + slot claim; a second `POST` gets `409`) and keeps an in-memory
-status registry — the durable on-disk checkpoint is the recovery story across a
-process restart (re-`POST` the run id). Auth is a shared `X-API-Key` vs
+status registry that is **mirrored to disk** by `api/run_store.py`: every transition
+writes `<run_dir>/status.json` (atomic replace), and `get`/`list_all` fall back to
+that file so `GET /runs` and `GET /runs/{id}` still answer after a restart. Memory
+wins when both exist — it is the only accurate view of a RUNNING run, so a
+`status.json` still reading RUNNING means the owning process died and hydrates as
+`INTERRUPTED` (re-`POST` the id to resume from the checkpoint). Run dirs with no
+`status.json` (CLI runs, pre-existing dirs) are INFERRED: `comparison/summary.json`
+present → `SUCCEEDED` + derived result code, else checkpoint → `INTERRUPTED`, else
+`UNKNOWN`. Disk hydration reuses `artifacts.run_dir_for`, so the containment rules
+hold for the status path too. Auth is a shared `X-API-Key` vs
 `IAG_SIM_API_KEY` (`api/security.py`); `thick` channel forces `MUREX_LLM_LOGIN=true`.
 The status `result_code` (`MATCH`/`DIFFERENCES`/`NO_COMPARISON`) mirrors the CLI exit
 codes `0`/`2`/`1`. Never call `asyncio.run` inside the API loop — `run_graph_async`
@@ -201,6 +209,10 @@ counts go to the trace (`usage` event).
 - **`simulate_trade` never raises for automation failures** — it returns
   `WorkerResult(ok=False, error=…)` so the orchestrator can record/retry.
   `worker.py` retries on `not result.ok` (tenacity, 3 attempts, exponential backoff).
+  **`run_worker` never raises on exhaustion either**: tenacity's `RetryError` (whose
+  message is the useless `RetryError[<Future … returned WorkerResult>]`) is unwrapped
+  back to the last attempt's `WorkerResult`, so one dead trade is a row in
+  `summary["failures"]` with the REAL error — not an aborted run. Don't let it escape.
 - **An export is trusted only when it's a real artifact, never the model's word.**
   The model's "DONE" text is never a success signal — success requires a CSV on disk
   that passes the reality gate (`murex/export_validate.py`): exists, non-empty, parses
