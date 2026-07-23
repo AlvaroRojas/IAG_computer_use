@@ -19,3 +19,4 @@ murex/startClient.lock
 
 # Generated at launch from murex/certs/*.cer by client.cmd/client.sh; never commit
 murex/certs/truststore.jks
+murex/logs/
