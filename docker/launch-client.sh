@@ -39,11 +39,11 @@ export MXJ_FILESERVER_PORT="${MXJ_FILESERVER_PORT:-${T_PORT:-20001}}"
 # overridable via MXJ_FILESERVER_SCHEME, defaulting to https since the servers migrated.
 export MXJ_FILESERVER_SCHEME="${MXJ_FILESERVER_SCHEME:-${T_SCHEME:-https}}"
 
-# Live env answers on site1 with NO destination-site (proven by the vendor's
-# working launcher); site=default + destination=site1 makes the client report
-# "MX.3 temporarily unavailable / services not started". Still env-overridable so
-# a before/after diff can target different sites.
-export MXJ_SITE_NAME="${MXJ_SITE_NAME:-site1}"
+# Site routing: mirror the official client_tls.cmd -- connect on external_site and
+# route to destination-site site1. Still env-overridable so a before/after diff can
+# target different sites.
+export MXJ_SITE_NAME="${MXJ_SITE_NAME:-external_site}"
+export MXJ_DESTINATION_SITE_NAME="${MXJ_DESTINATION_SITE_NAME:-site1}"
 export MXJ_PLATFORM_NAME="${MXJ_PLATFORM_NAME:-MX}"
 export MXJ_PROCESS_NICK_NAME="${MXJ_PROCESS_NICK_NAME:-MX}"
 export MXJ_PING_POP_GUI_DOCUMENT="${MXJ_PING_POP_GUI_DOCUMENT:-1}"
@@ -102,9 +102,9 @@ fi
 
 # Common args.
 JAVA_ARGS=(
-  -Xmx256M
-  -Dsun.java2d.noddraw=true
-  -Dsun.java2d.uiScale.enabled=false
+  -Xmx1G
+  -Dsun.java2d.uiScale.enabled=true
+  -Dsun.java2d.uiScale=1.0
   -DJINTEGRA_NATIVE_MODE
   -Djxbrowser.logging.file=logs/jxbrowser.log
   -Djxbrowser.crash.dump.dir=logs/JxBrowser
@@ -160,6 +160,7 @@ exec "$JAVAHOME/bin/java" \
   -jar "$MXJ_BOOT" \
   /MXJ_MLC_SERVICE:MXMLC.SESSION \
   /MXJ_SITE_NAME:"$MXJ_SITE_NAME" \
+  /MXJ_DESTINATION_SITE_NAME:"$MXJ_DESTINATION_SITE_NAME" \
   /MXJ_CLASS_NAME:murex.gui.xml.XmlGuiClientBoot \
   /MXJ_PLATFORM_NAME:"$MXJ_PLATFORM_NAME" \
   /MXJ_PROCESS_NICK_NAME:"$MXJ_PROCESS_NICK_NAME" \
